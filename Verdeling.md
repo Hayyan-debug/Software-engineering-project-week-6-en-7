@@ -1,23 +1,25 @@
-Person A and Person B can split tasks efficiently: Person A focuses on server-side logic and core mechanics, while Person B handles client-side rendering and UI. Merge via shared files (e.g., Player.py) and test together early.
+Person A handles server and netcode, Person B focuses on client rendering and physics, Person C builds UI/menus and assets. This enables parallel development with clear handoffs; use Git for shared code like Player.py.
 
-## Person A: Server & Mechanics
-- Implement server.py: Socket setup, client handling (accept 2 players), game loop (60 FPS), input processing, state updates/broadcast.
-- Core physics: Movement, collisions, gravity, knockback in shared Player.py and Physics.py.
-- Weapons logic: Weapon classes with attack effects, projectiles, damage calc.
-- Menus backend: Collect weapon choices/votes, decide arena, handle win conditions.
+## Person A: Server & Netcode (Hayyan)
+- Server.py: Socket server, client auth (2 players), game loop (inputs -> updates -> broadcast JSON states).
+- Combat resolution: Damage, knockback, win detection, vote handling.
 
-## Person B: Client & UI
-- Implement client.py: Socket connection, input handling (keys), local prediction, state rendering.
-- Menus frontend: Weapon selection screen, voting UI with buttons/images/live bars.
-- Arena rendering: Tilemaps, camera, particles, animations (use sprite sheets).
-- Polish: HUD (health, % damage), sounds, effects.
+## Person B: Client Core & Mechanics (Finn)
+- Client.py basics: Input capture, local prediction, rendering loop.
+- Physics/Mechanics: Movement (jump, dash), collisions, weapons (hitboxes/projectiles) in shared files.
+- Arena: Tile collision, camera follow.
 
-## Shared & Integration Tasks
+## Person C: UI, Menus & Assets (Thijs)
+- Menus: Weapon select, arena vote screens (buttons, nav, visuals).
+- HUD: Health bars, timers, effects (particles).
+- Assets: Simple sprites/rects (players, weapons, arenas); sounds. Integrate into client.
+
+## Shared & Integration
 | Task | Who Leads | Notes |
 |------|-----------|-------|
-| Shared classes (Player, Weapon, Arena) | Both | Git repo; define JSON formats for net data early. |
-| Testing | Both | Localhost first; add bots for solo test. |
-| Assets | Person B | Free from Kenney.nl; commit to repo. |
-| Net sync debugging | Person A | Fix lag/desync; use logs. |
+| Shared models (Player, Weapon, JSON protocols) | Person A | Define early; test formats. |
+| Testing (local net, bots) | All | Weekly merges; localhost first.  |
+| Polish (lag fix, sync) | Person A/B | Debug desync.  |
+| Full integration | Person B | Run end-to-end flow. |
 
-This split allows parallel work; sync daily on GitHub. Meet after menus for fight integration.
+Sync daily on GitHub; Person B coordinates client-server links.
