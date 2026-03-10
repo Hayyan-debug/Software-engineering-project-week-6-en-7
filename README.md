@@ -17,5 +17,8 @@ Optional: Add some description of the design choices, and maybe a UML class diag
 ## Authors
 Name of each person that contributed to writing your game.
 
+## Task Division (Verdeling)
+For a detailed division of tasks between team members, please refer to [Verdeling.md](./Verdeling.md).
+
 ## License
 Optional: Maybe [choose a license](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository) if you care about other people using your code. 
