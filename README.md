@@ -1,5 +1,7 @@
 # <Name of your Game>
 
+[![Task Division - Verdeling](https://img.shields.io/badge/Task_Division-Verdeling.md-2ea44f?style=for-the-badge&logo=github)](./Verdeling.md)
+
 ## Introduction
 Short description of your game, and maybe an image, so people quickly understand what it is about.
 
