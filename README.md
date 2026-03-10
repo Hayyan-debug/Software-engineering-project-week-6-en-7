@@ -16,6 +16,9 @@ Instructions how to play your game. Include instructions so that the grader can 
 ## Design
 Optional: Add some description of the design choices, and maybe a UML class diagram or other material if that helped you during development.
 
+### Concept Art
+![Concept Art](./image.png)
+
 ## Authors
 Name of each person that contributed to writing your game.
 
