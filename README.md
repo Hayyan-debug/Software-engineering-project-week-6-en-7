@@ -21,6 +21,7 @@ Optional: Add some description of the design choices, and maybe a UML class diag
 Thijs van der Meer
 Hayyan Hamdani
 Finn?
+[New Team Member]
 
 ## Task Division (Verdeling)
 For a detailed division of tasks between team members, please refer to [Verdeling.md](./Verdeling.md).
