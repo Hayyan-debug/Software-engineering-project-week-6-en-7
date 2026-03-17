@@ -18,9 +18,9 @@ import socket
 import threading
 from abc import ABC, abstractmethod
 
-# ---------------------------------------------------------------------------
+
 # Constants
-# ---------------------------------------------------------------------------
+
 
 WIDTH, HEIGHT = 1280, 720
 FPS = 60
@@ -52,9 +52,7 @@ YELLOW     = (255, 230, 100)
 BG_COLOR   = (20,  20,  35 )
 TILE_COLOR = (80,  90,  110)
 
-# ---------------------------------------------------------------------------
 # Networking helpers (thin wrapper — server.py handles the heavy lifting)
-# ---------------------------------------------------------------------------
 
 class NetworkClient:
     """
@@ -113,9 +111,9 @@ class NetworkClient:
         self.connected = False
 
 
-# ---------------------------------------------------------------------------
+
 # Base character class (polymorphism requirement from assignment)
-# ---------------------------------------------------------------------------
+
 
 class Fighter(ABC):
     """
@@ -166,9 +164,9 @@ class Fighter(ABC):
         # Rect for collision (updated every frame)
         self.rect = pygame.Rect(int(self.x), int(self.y), self.width, self.height)
 
-    # ------------------------------------------------------------------ #
+  
     #  Abstract interface                                                  #
-    # ------------------------------------------------------------------ #
+
 
     @abstractmethod
     def special_move(self, direction: int) -> None:
@@ -178,9 +176,9 @@ class Fighter(ABC):
     def draw_character(self, surface: pygame.Surface, camera_x: int, camera_y: int) -> None:
         """Draw the fighter sprite/shape."""
 
-    # ------------------------------------------------------------------ #
+ 
     #  Physics update — called once per frame                             #
-    # ------------------------------------------------------------------ #
+ 
 
     def update(self, dt: float, tiles: list["Tile"]) -> None:
         """Main physics step."""
@@ -239,7 +237,7 @@ class Fighter(ABC):
                 self.x = float(self.rect.x)
                 self.vx = 0
 
-        # --- Vertical ---
+        # Vertical
         was_on_ground = self.on_ground
         self.on_ground = False
 
@@ -273,9 +271,8 @@ class Fighter(ABC):
                 self.y < -400 or self.y > HEIGHT + 200):
             self.is_dead = True
 
-    # ------------------------------------------------------------------ #
     #  Input-driven actions                                                #
-    # ------------------------------------------------------------------ #
+    
 
     def move(self, direction: int) -> None:
         """direction: -1 left, 0 stop, +1 right"""
@@ -340,9 +337,9 @@ class Fighter(ABC):
         self.damage_pct    = 0.0
         self.jumps_left    = 2
 
-    # ------------------------------------------------------------------ #
+   
     #  Serialisation for networking                                        #
-    # ------------------------------------------------------------------ #
+  
 
     def to_dict(self) -> dict:
         return {
@@ -369,9 +366,9 @@ class Fighter(ABC):
         self.dashing     = data.get("dashing",     self.dashing)
         self.rect.topleft = (int(self.x), int(self.y))
 
-    # ------------------------------------------------------------------ #
+ 
     #  Shared draw helpers                                                 #
-    # ------------------------------------------------------------------ #
+
 
     def draw(self, surface: pygame.Surface, cam_x: int = 0, cam_y: int = 0) -> None:
         self.draw_character(surface, cam_x, cam_y)
@@ -388,9 +385,9 @@ class Fighter(ABC):
         surface.blit(surf, (px, py))
 
 
-# ---------------------------------------------------------------------------
+# 
 # Concrete fighter subclasses  (one per weapon type)
-# ---------------------------------------------------------------------------
+
 
 class SwordFighter(Fighter):
     """Fast, close-range attacker. Slightly lighter."""
@@ -459,9 +456,8 @@ class HammerFighter(Fighter):
         pygame.draw.rect(surface, (180, 60, 60), (hx, ry, 20, 26), border_radius=4)
 
 
-# ---------------------------------------------------------------------------
 # Arena tile
-# ---------------------------------------------------------------------------
+
 
 class Tile:
     """A single solid platform tile."""
@@ -481,9 +477,9 @@ class Tile:
                          (rx, ry, self.rect.width, 4), border_radius=2)
 
 
-# ---------------------------------------------------------------------------
+
 # Arena layouts
-# ---------------------------------------------------------------------------
+
 
 def build_arena(arena_id: int = 0) -> list[Tile]:
     """Return a list of Tiles for the chosen arena."""
@@ -521,9 +517,9 @@ def build_arena(arena_id: int = 0) -> list[Tile]:
         return [Tile(i * TILE_SIZE, 600) for i in range(26)]
 
 
-# ---------------------------------------------------------------------------
+
 # Input handler
-# ---------------------------------------------------------------------------
+
 
 class InputHandler:
     """
@@ -582,9 +578,9 @@ class InputHandler:
         self._prev_keys = pressed
 
 
-# ---------------------------------------------------------------------------
+
 # HUD
-# ---------------------------------------------------------------------------
+
 
 class HUD:
     """Draws damage percentages and lives at the bottom of the screen."""
@@ -617,9 +613,9 @@ class HUD:
             surface.blit(label, label.get_rect(center=(cx, HEIGHT - panel_h + 12)))
 
 
-# ---------------------------------------------------------------------------
+
 # Main game loop
-# ---------------------------------------------------------------------------
+
 
 class Game:
     """
@@ -737,9 +733,9 @@ class Game:
             pygame.draw.circle(self.screen, color, (sx, sy), radius)
 
 
-# ---------------------------------------------------------------------------
+
 # Entry point
-# ---------------------------------------------------------------------------
+
 
 def main() -> None:
     pygame.init()
