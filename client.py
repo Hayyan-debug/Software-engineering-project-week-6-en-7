@@ -1,0 +1,769 @@
+"""
+client.py - Gauntlet Galaxy
+Gameplay & Physics module (Person B: Finn)
+
+Responsibilities:
+- Input capture & local prediction
+- Rendering loop
+- Movement physics (run, jump, dash, knockback)
+- Gravity, wall-jumping
+- Collision with tiles and other players
+"""
+
+import pygame
+import sys
+import math
+import json
+import socket
+import threading
+from abc import ABC, abstractmethod
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+WIDTH, HEIGHT = 1280, 720
+FPS = 60
+TILE_SIZE = 48
+
+# Physics
+GRAVITY = 1800          # px/s²  — tune freely
+TERMINAL_VELOCITY = 900 # px/s   — max fall speed
+JUMP_FORCE = -620       # px/s   — initial upward velocity on jump
+COYOTE_TIME = 0.10      # s      — grace window after walking off a ledge
+JUMP_BUFFER = 0.10      # s      — jump queued before landing still works
+DASH_SPEED = 900        # px/s
+DASH_DURATION = 0.15    # s
+DASH_COOLDOWN = 0.8     # s
+WALK_SPEED = 280        # px/s
+KNOCKBACK_FRICTION = 0.85   # multiplied per frame (applied to kb velocity)
+
+# Knockback thresholds (Smash-style percentage)
+KO_PERCENTAGE = 120     # above this, knockback can kill
+
+# Colors (fallback if assets missing)
+WHITE      = (255, 255, 255)
+BLACK      = (0,   0,   0  )
+RED        = (220, 60,  60 )
+BLUE       = (60,  120, 220)
+GREEN      = (80,  200, 80 )
+ORANGE     = (255, 180, 80 )
+YELLOW     = (255, 230, 100)
+BG_COLOR   = (20,  20,  35 )
+TILE_COLOR = (80,  90,  110)
+
+# ---------------------------------------------------------------------------
+# Networking helpers (thin wrapper — server.py handles the heavy lifting)
+# ---------------------------------------------------------------------------
+
+class NetworkClient:
+    """
+    Sends local player state to the server, receives opponent state back.
+    All socket I/O runs on a background thread so the game loop never blocks.
+    """
+
+    def __init__(self, host: str = "localhost", port: int = 5555):
+        self.host = host
+        self.port = port
+        self.sock: socket.socket | None = None
+        self.connected = False
+        self.incoming: dict = {}   # latest snapshot from server
+        self._lock = threading.Lock()
+
+    def connect(self) -> bool:
+        """Try to connect; returns True on success."""
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.connect((self.host, self.port))
+            self.connected = True
+            threading.Thread(target=self._recv_loop, daemon=True).start()
+            return True
+        except OSError:
+            return False
+
+    def send_state(self, state: dict) -> None:
+        """Send local player state as JSON (non-blocking best-effort)."""
+        if not self.connected or self.sock is None:
+            return
+        try:
+            data = json.dumps(state).encode() + b"\n"
+            self.sock.sendall(data)
+        except OSError:
+            self.connected = False
+
+    def get_incoming(self) -> dict:
+        with self._lock:
+            return dict(self.incoming)
+
+    def _recv_loop(self) -> None:
+        buffer = b""
+        while self.connected:
+            try:
+                chunk = self.sock.recv(4096)
+                if not chunk:
+                    break
+                buffer += chunk
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    snapshot = json.loads(line.decode())
+                    with self._lock:
+                        self.incoming = snapshot
+            except OSError:
+                break
+        self.connected = False
+
+
+# ---------------------------------------------------------------------------
+# Base character class (polymorphism requirement from assignment)
+# ---------------------------------------------------------------------------
+
+class Fighter(ABC):
+    """
+    Abstract base for every playable fighter.
+    Subclasses differ in stats and special moves but share all physics logic.
+    """
+
+    # --- Override these in subclasses ---
+    WALK_SPEED:   float = WALK_SPEED
+    JUMP_FORCE:   float = JUMP_FORCE
+    WEIGHT:       float = 1.0        # heavier = less knockback received
+    COLOR:        tuple = WHITE
+
+    def __init__(self, x: float, y: float, player_id: int):
+        self.player_id = player_id
+
+        # Position & velocity
+        self.x = float(x)
+        self.y = float(y)
+        self.vx = 0.0
+        self.vy = 0.0
+
+        # Knockback velocity (separate so it decays independently)
+        self.kb_vx = 0.0
+        self.kb_vy = 0.0
+
+        # Dimensions
+        self.width  = 40
+        self.height = 60
+
+        # State flags
+        self.on_ground    = False
+        self.facing_right = True
+        self.is_dead      = False
+        self.damage_pct   = 0.0      # Smash-style damage percentage
+
+        # Jump mechanics
+        self.coyote_timer  = 0.0
+        self.jump_buffer   = 0.0
+        self.jumps_left    = 2       # double-jump
+
+        # Dash mechanics
+        self.dashing         = False
+        self.dash_timer      = 0.0
+        self.dash_cooldown   = 0.0
+        self.dash_direction  = 1
+
+        # Rect for collision (updated every frame)
+        self.rect = pygame.Rect(int(self.x), int(self.y), self.width, self.height)
+
+    # ------------------------------------------------------------------ #
+    #  Abstract interface                                                  #
+    # ------------------------------------------------------------------ #
+
+    @abstractmethod
+    def special_move(self, direction: int) -> None:
+        """Weapon-specific special action (sword slash, arrow shot, etc.)."""
+
+    @abstractmethod
+    def draw_character(self, surface: pygame.Surface, camera_x: int, camera_y: int) -> None:
+        """Draw the fighter sprite/shape."""
+
+    # ------------------------------------------------------------------ #
+    #  Physics update — called once per frame                             #
+    # ------------------------------------------------------------------ #
+
+    def update(self, dt: float, tiles: list["Tile"]) -> None:
+        """Main physics step."""
+        self._update_timers(dt)
+
+        if self.dashing:
+            self._update_dash(dt)
+        else:
+            self._apply_gravity(dt)
+
+        self._apply_knockback()
+        self._move_and_collide(dt, tiles)
+        self._check_ko()
+
+        # Sync rect
+        self.rect.topleft = (int(self.x), int(self.y))
+
+    def _update_timers(self, dt: float) -> None:
+        if not self.on_ground:
+            self.coyote_timer = max(0.0, self.coyote_timer - dt)
+        self.jump_buffer   = max(0.0, self.jump_buffer   - dt)
+        self.dash_cooldown = max(0.0, self.dash_cooldown - dt)
+        if self.dashing:
+            self.dash_timer -= dt
+            if self.dash_timer <= 0:
+                self.dashing = False
+                self.vx = self.dash_direction * self.WALK_SPEED * 0.4
+
+    def _apply_gravity(self, dt: float) -> None:
+        self.vy += GRAVITY * dt
+        self.vy = min(self.vy, TERMINAL_VELOCITY)
+
+    def _apply_knockback(self) -> None:
+        self.kb_vx *= KNOCKBACK_FRICTION
+        self.kb_vy *= KNOCKBACK_FRICTION
+        if abs(self.kb_vx) < 1:
+            self.kb_vx = 0
+        if abs(self.kb_vy) < 1:
+            self.kb_vy = 0
+
+    def _move_and_collide(self, dt: float, tiles: list["Tile"]) -> None:
+        total_vx = self.vx + self.kb_vx
+        total_vy = self.vy + self.kb_vy
+
+        # --- Horizontal ---
+        self.x += total_vx * dt
+        self.rect.x = int(self.x)
+        for tile in tiles:
+            if self.rect.colliderect(tile.rect):
+                if total_vx > 0:
+                    self.rect.right = tile.rect.left
+                    self.kb_vx = 0
+                elif total_vx < 0:
+                    self.rect.left = tile.rect.right
+                    self.kb_vx = 0
+                self.x = float(self.rect.x)
+                self.vx = 0
+
+        # --- Vertical ---
+        was_on_ground = self.on_ground
+        self.on_ground = False
+
+        self.y += total_vy * dt
+        self.rect.y = int(self.y)
+        for tile in tiles:
+            if self.rect.colliderect(tile.rect):
+                if total_vy > 0:                  # falling → land
+                    self.rect.bottom = tile.rect.top
+                    self.vy    = 0
+                    self.kb_vy = 0
+                    self.on_ground  = True
+                    self.jumps_left = 2
+                elif total_vy < 0:                # rising → hit ceiling
+                    self.rect.top = tile.rect.bottom
+                    self.vy    = 0
+                    self.kb_vy = 0
+                self.y = float(self.rect.y)
+
+        # Reset coyote timer when freshly landing
+        if self.on_ground and not was_on_ground:
+            self.coyote_timer = COYOTE_TIME
+
+        # Start coyote countdown when leaving ground without jumping
+        if was_on_ground and not self.on_ground and self.vy >= 0:
+            self.coyote_timer = COYOTE_TIME
+
+    def _check_ko(self) -> None:
+        """Mark fighter as dead when blasted off-screen."""
+        if (self.x < -300 or self.x > WIDTH + 300 or
+                self.y < -400 or self.y > HEIGHT + 200):
+            self.is_dead = True
+
+    # ------------------------------------------------------------------ #
+    #  Input-driven actions                                                #
+    # ------------------------------------------------------------------ #
+
+    def move(self, direction: int) -> None:
+        """direction: -1 left, 0 stop, +1 right"""
+        if self.dashing:
+            return
+        self.vx = direction * self.WALK_SPEED
+        if direction != 0:
+            self.facing_right = direction > 0
+
+    def jump(self) -> None:
+        """Called when the jump button is pressed."""
+        can_jump = self.on_ground or self.coyote_timer > 0
+        if can_jump:
+            self._do_jump()
+        elif self.jumps_left > 0:
+            self._do_jump()
+        else:
+            # Buffer the jump
+            self.jump_buffer = JUMP_BUFFER
+
+    def _do_jump(self) -> None:
+        self.vy = self.JUMP_FORCE
+        self.on_ground    = False
+        self.coyote_timer = 0.0
+        if self.jumps_left > 0:
+            self.jumps_left -= 1
+
+    def try_buffered_jump(self) -> None:
+        """Called on landing to consume a buffered jump."""
+        if self.jump_buffer > 0 and self.on_ground:
+            self._do_jump()
+            self.jump_buffer = 0.0
+
+    def dash(self, direction: int) -> None:
+        """Initiate a dash if off cooldown."""
+        if self.dash_cooldown > 0 or self.dashing:
+            return
+        self.dashing        = True
+        self.dash_timer     = DASH_DURATION
+        self.dash_cooldown  = DASH_COOLDOWN
+        self.dash_direction = direction if direction != 0 else (1 if self.facing_right else -1)
+        self.vx  = self.dash_direction * DASH_SPEED
+        self.vy  = 0
+        self.kb_vx = 0
+        self.kb_vy = 0
+
+    def receive_knockback(self, source_x: float, power: float) -> None:
+        """
+        Apply Smash-style knockback.
+        Higher damage_pct → more knockback received.
+        """
+        scale = (1 + self.damage_pct / 50) / self.WEIGHT
+        direction = 1 if self.x >= source_x else -1
+        self.kb_vx = direction * power * scale
+        self.kb_vy = -power * scale * 0.6   # upward component
+
+    def respawn(self, x: float, y: float) -> None:
+        self.x, self.y     = x, y
+        self.vx = self.vy  = 0.0
+        self.kb_vx = self.kb_vy = 0.0
+        self.is_dead       = False
+        self.damage_pct    = 0.0
+        self.jumps_left    = 2
+
+    # ------------------------------------------------------------------ #
+    #  Serialisation for networking                                        #
+    # ------------------------------------------------------------------ #
+
+    def to_dict(self) -> dict:
+        return {
+            "id":          self.player_id,
+            "x":           self.x,
+            "y":           self.y,
+            "vx":          self.vx,
+            "vy":          self.vy,
+            "facing":      self.facing_right,
+            "damage_pct":  self.damage_pct,
+            "is_dead":     self.is_dead,
+            "dashing":     self.dashing,
+        }
+
+    def from_dict(self, data: dict) -> None:
+        """Apply a server snapshot (used for the remote player)."""
+        self.x           = data.get("x",          self.x)
+        self.y           = data.get("y",          self.y)
+        self.vx          = data.get("vx",          self.vx)
+        self.vy          = data.get("vy",          self.vy)
+        self.facing_right = data.get("facing",     self.facing_right)
+        self.damage_pct  = data.get("damage_pct",  self.damage_pct)
+        self.is_dead     = data.get("is_dead",     self.is_dead)
+        self.dashing     = data.get("dashing",     self.dashing)
+        self.rect.topleft = (int(self.x), int(self.y))
+
+    # ------------------------------------------------------------------ #
+    #  Shared draw helpers                                                 #
+    # ------------------------------------------------------------------ #
+
+    def draw(self, surface: pygame.Surface, cam_x: int = 0, cam_y: int = 0) -> None:
+        self.draw_character(surface, cam_x, cam_y)
+        self._draw_damage_hud(surface, cam_x, cam_y)
+
+    def _draw_damage_hud(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        """Tiny damage % above the fighter."""
+        font = pygame.font.SysFont("impact", 20)
+        label = f"{int(self.damage_pct)}%"
+        color = YELLOW if self.damage_pct < 60 else ORANGE if self.damage_pct < KO_PERCENTAGE else RED
+        surf = font.render(label, True, color)
+        px = int(self.x) - cam_x + self.width // 2 - surf.get_width() // 2
+        py = int(self.y) - cam_y - 28
+        surface.blit(surf, (px, py))
+
+
+# ---------------------------------------------------------------------------
+# Concrete fighter subclasses  (one per weapon type)
+# ---------------------------------------------------------------------------
+
+class SwordFighter(Fighter):
+    """Fast, close-range attacker. Slightly lighter."""
+    WALK_SPEED = 300
+    JUMP_FORCE = -650
+    WEIGHT     = 0.9
+    COLOR      = (100, 180, 255)
+
+    def special_move(self, direction: int) -> None:
+        """Forward lunge — brief burst of horizontal speed."""
+        if not self.dashing:
+            self.vx = direction * 700
+            self.vy = -100
+
+    def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        rx = int(self.x) - cam_x
+        ry = int(self.y) - cam_y
+        pygame.draw.rect(surface, self.COLOR, (rx, ry, self.width, self.height), border_radius=6)
+        # Sword indicator
+        sx = rx + (self.width if self.facing_right else -14)
+        pygame.draw.rect(surface, YELLOW, (sx, ry + 10, 14, 6), border_radius=2)
+
+
+class BowFighter(Fighter):
+    """Ranged attacker. Slower on ground but good air mobility."""
+    WALK_SPEED = 250
+    JUMP_FORCE = -600
+    WEIGHT     = 0.85
+    COLOR      = (100, 220, 130)
+
+    def special_move(self, direction: int) -> None:
+        """Quick back-hop to create distance."""
+        self.vx = -direction * 500
+        self.vy = -300
+
+    def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        rx = int(self.x) - cam_x
+        ry = int(self.y) - cam_y
+        pygame.draw.rect(surface, self.COLOR, (rx, ry, self.width, self.height), border_radius=6)
+        # Bow arc indicator
+        cx = rx + (self.width + 4 if self.facing_right else -4)
+        pygame.draw.arc(surface, ORANGE,
+                        (cx - 8, ry + 5, 16, self.height - 10),
+                        math.pi * 0.25, math.pi * 0.75, 3)
+
+
+class HammerFighter(Fighter):
+    """Heavy brawler. Slower but hits hard and is very hard to knock back."""
+    WALK_SPEED = 220
+    JUMP_FORCE = -550
+    WEIGHT     = 1.4
+    COLOR      = (220, 100, 100)
+
+    def special_move(self, direction: int) -> None:
+        """Ground slam — dive straight down."""
+        if not self.on_ground:
+            self.vy = DASH_SPEED
+            self.kb_vy = 0
+
+    def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        rx = int(self.x) - cam_x
+        ry = int(self.y) - cam_y
+        pygame.draw.rect(surface, self.COLOR, (rx, ry, self.width, self.height), border_radius=4)
+        # Hammer head
+        hx = rx + (self.width if self.facing_right else -20)
+        pygame.draw.rect(surface, (180, 60, 60), (hx, ry, 20, 26), border_radius=4)
+
+
+# ---------------------------------------------------------------------------
+# Arena tile
+# ---------------------------------------------------------------------------
+
+class Tile:
+    """A single solid platform tile."""
+
+    def __init__(self, x: int, y: int, w: int = TILE_SIZE, h: int = TILE_SIZE,
+                 color: tuple = TILE_COLOR):
+        self.rect  = pygame.Rect(x, y, w, h)
+        self.color = color
+
+    def draw(self, surface: pygame.Surface, cam_x: int = 0, cam_y: int = 0) -> None:
+        rx = self.rect.x - cam_x
+        ry = self.rect.y - cam_y
+        pygame.draw.rect(surface, self.color,
+                         (rx, ry, self.rect.width, self.rect.height), border_radius=4)
+        # Subtle top highlight
+        pygame.draw.rect(surface, tuple(min(c + 40, 255) for c in self.color),
+                         (rx, ry, self.rect.width, 4), border_radius=2)
+
+
+# ---------------------------------------------------------------------------
+# Arena layouts
+# ---------------------------------------------------------------------------
+
+def build_arena(arena_id: int = 0) -> list[Tile]:
+    """Return a list of Tiles for the chosen arena."""
+
+    if arena_id == 0:
+        # --- Classic flat stage ---
+        tiles = []
+        # Main floor
+        for i in range(26):
+            tiles.append(Tile(i * TILE_SIZE + 20, 580))
+        # Side platforms
+        for i in range(5):
+            tiles.append(Tile(120 + i * TILE_SIZE, 430))
+            tiles.append(Tile(840 + i * TILE_SIZE, 430))
+        # Center platform
+        for i in range(7):
+            tiles.append(Tile(490 + i * TILE_SIZE, 350))
+        return tiles
+
+    elif arena_id == 1:
+        # --- Floating islands ---
+        tiles = []
+        for i in range(6):
+            tiles.append(Tile(80  + i * TILE_SIZE, 600))
+            tiles.append(Tile(760 + i * TILE_SIZE, 600))
+        for i in range(4):
+            tiles.append(Tile(300 + i * TILE_SIZE, 460))
+            tiles.append(Tile(600 + i * TILE_SIZE, 380))
+        for i in range(3):
+            tiles.append(Tile(430 + i * TILE_SIZE, 260))
+        return tiles
+
+    else:
+        # Fallback: simple ground
+        return [Tile(i * TILE_SIZE, 600) for i in range(26)]
+
+
+# ---------------------------------------------------------------------------
+# Input handler
+# ---------------------------------------------------------------------------
+
+class InputHandler:
+    """
+    Maps keyboard state → actions for a single local player.
+    Supports two control schemes (WASD or Arrow keys) to allow local testing.
+    """
+
+    SCHEMES = {
+        "wasd": {
+            "left":    pygame.K_a,
+            "right":   pygame.K_d,
+            "jump":    pygame.K_w,
+            "dash":    pygame.K_LSHIFT,
+            "special": pygame.K_f,
+        },
+        "arrows": {
+            "left":    pygame.K_LEFT,
+            "right":   pygame.K_RIGHT,
+            "jump":    pygame.K_UP,
+            "dash":    pygame.K_RSHIFT,
+            "special": pygame.K_SLASH,
+        },
+    }
+
+    def __init__(self, scheme: str = "wasd"):
+        self.keys = self.SCHEMES[scheme]
+        self._prev_keys: set = set()
+
+    def process(self, fighter: Fighter, keys_down, events: list) -> None:
+        """Apply keyboard state to the fighter this frame."""
+        pressed = set()
+
+        # --- Held keys → continuous actions ---
+        direction = 0
+        if keys_down[self.keys["left"]]:
+            direction -= 1
+            pressed.add("left")
+        if keys_down[self.keys["right"]]:
+            direction += 1
+            pressed.add("right")
+        fighter.move(direction)
+
+        # --- Pressed-this-frame keys → one-shot actions ---
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == self.keys["jump"]:
+                    fighter.jump()
+                if event.key == self.keys["dash"]:
+                    fighter.dash(direction if direction != 0 else
+                                 (1 if fighter.facing_right else -1))
+                if event.key == self.keys["special"]:
+                    fighter.special_move(1 if fighter.facing_right else -1)
+
+        # Consume buffered jump on landing
+        fighter.try_buffered_jump()
+        self._prev_keys = pressed
+
+
+# ---------------------------------------------------------------------------
+# HUD
+# ---------------------------------------------------------------------------
+
+class HUD:
+    """Draws damage percentages and lives at the bottom of the screen."""
+
+    def __init__(self, fighters: list[Fighter]):
+        self.fighters = fighters
+        try:
+            self.font_big   = pygame.font.SysFont("impact", 52)
+            self.font_small = pygame.font.SysFont("consolas", 22, bold=True)
+        except Exception:
+            self.font_big   = pygame.font.Font(None, 56)
+            self.font_small = pygame.font.Font(None, 24)
+
+    def draw(self, surface: pygame.Surface) -> None:
+        panel_h = 70
+        panel = pygame.Surface((WIDTH, panel_h), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 180))
+        surface.blit(panel, (0, HEIGHT - panel_h))
+
+        slot_w = WIDTH // max(len(self.fighters), 1)
+        for i, f in enumerate(self.fighters):
+            cx = slot_w * i + slot_w // 2
+            cy = HEIGHT - panel_h // 2
+
+            color = YELLOW if f.damage_pct < 60 else ORANGE if f.damage_pct < KO_PERCENTAGE else RED
+            pct_surf = self.font_big.render(f"{int(f.damage_pct)}%", True, color)
+            surface.blit(pct_surf, pct_surf.get_rect(center=(cx, cy - 4)))
+
+            label = self.font_small.render(f"P{f.player_id + 1}  {type(f).__name__}", True, f.COLOR)
+            surface.blit(label, label.get_rect(center=(cx, HEIGHT - panel_h + 12)))
+
+
+# ---------------------------------------------------------------------------
+# Main game loop
+# ---------------------------------------------------------------------------
+
+class Game:
+    """
+    Top-level game object.
+    Handles the rendering loop and wires everything together.
+    """
+
+    def __init__(self, arena_id: int = 0,
+                 fighter_cls_local=SwordFighter,
+                 fighter_cls_remote=HammerFighter,
+                 net: NetworkClient | None = None):
+
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        pygame.display.set_caption("Gauntlet Galaxy")
+        self.clock = pygame.time.Clock()
+
+        self.tiles = build_arena(arena_id)
+
+        # Local player is always index 0
+        self.local_fighter  = fighter_cls_local( 300, 400, player_id=0)
+        self.remote_fighter = fighter_cls_remote(900, 400, player_id=1)
+        self.fighters = [self.local_fighter, self.remote_fighter]
+
+        self.input_handler = InputHandler("wasd")
+        self.hud           = HUD(self.fighters)
+        self.net           = net
+
+        # Background (solid color fallback if no asset)
+        self.bg_color = BG_COLOR
+
+        # Star field for background
+        import random
+        self.stars = [(random.randint(0, WIDTH), random.randint(0, HEIGHT),
+                       random.random()) for _ in range(120)]
+
+    def run(self) -> None:
+        """Main loop."""
+        running = True
+        while running:
+            dt = min(self.clock.tick(FPS) / 1000.0, 0.05)  # cap dt to avoid tunneling
+
+            # --- Events ---
+            events = []
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    running = False
+                events.append(event)
+
+            keys = pygame.key.get_pressed()
+
+            # --- Input ---
+            self.input_handler.process(self.local_fighter, keys, events)
+
+            # --- Physics update ---
+            for fighter in self.fighters:
+                fighter.update(dt, self.tiles)
+
+            # --- Knockback on player collision ---
+            self._check_player_collision()
+
+            # --- Respawn ---
+            for fighter in self.fighters:
+                if fighter.is_dead:
+                    fighter.respawn(640, 200)
+
+            # --- Networking ---
+            if self.net and self.net.connected:
+                self.net.send_state(self.local_fighter.to_dict())
+                snapshot = self.net.get_incoming()
+                if snapshot:
+                    self.remote_fighter.from_dict(snapshot)
+
+            # --- Render ---
+            self._draw(dt)
+
+        pygame.quit()
+        sys.exit()
+
+    def _check_player_collision(self) -> None:
+        """Simple AABB player-vs-player collision with light knockback."""
+        lf = self.local_fighter
+        rf = self.remote_fighter
+        if lf.rect.colliderect(rf.rect):
+            # Push apart
+            overlap_x = (lf.rect.centerx - rf.rect.centerx)
+            push = 4.0
+            lf.x += push if overlap_x >= 0 else -push
+            rf.x -= push if overlap_x >= 0 else -push
+
+    def _draw(self, dt: float) -> None:
+        # Background
+        self.screen.fill(self.bg_color)
+        self._draw_stars()
+
+        # Tiles
+        for tile in self.tiles:
+            tile.draw(self.screen)
+
+        # Fighters
+        for fighter in self.fighters:
+            fighter.draw(self.screen)
+
+        # HUD
+        self.hud.draw(self.screen)
+
+        pygame.display.flip()
+
+    def _draw_stars(self) -> None:
+        for sx, sy, brightness in self.stars:
+            radius = 1 if brightness < 0.5 else 2
+            alpha  = int(brightness * 200)
+            color  = (alpha, alpha, alpha)
+            pygame.draw.circle(self.screen, color, (sx, sy), radius)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    pygame.init()
+
+    # Attempt to connect to server (optional — game runs offline too)
+    net = NetworkClient(host="localhost", port=5555)
+    connected = net.connect()
+    if not connected:
+        print("[client] No server found — running in local/offline mode.")
+        net = None
+
+    # TODO: replace with actual character-select result from startmenu.py
+    arena_id         = 0
+    fighter_cls_local  = SwordFighter
+    fighter_cls_remote = HammerFighter
+
+    game = Game(
+        arena_id=arena_id,
+        fighter_cls_local=fighter_cls_local,
+        fighter_cls_remote=fighter_cls_remote,
+        net=net,
+    )
+    game.run()
+
+
+if __name__ == "__main__":
+    main()
