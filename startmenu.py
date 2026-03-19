@@ -64,11 +64,28 @@ def load_image(filename, size=None):
         return surf
 
 
-# Load backgrounds
-background_img = load_image("background.png").convert()
-looking_bg = load_image("lookingforteammate.png").convert()
-looking_platforms = load_image("lookingforteammateplatforms.png")
+# Load map data for battle lobby
 chronos_bg = load_image("chronoscleftsmap.png")
+
+# Load animated background frames
+anim_background_frames = []
+anim_frame_dir = os.path.join("assets", "anim_frames")
+if os.path.exists(anim_frame_dir):
+    frame_files = sorted([f for f in os.listdir(anim_frame_dir) if f.startswith("frame_") and f.endswith(".png")])
+    for f in frame_files:
+        try:
+            full_path = os.path.join(anim_frame_dir, f)
+            frame_img = pygame.image.load(full_path).convert()
+            frame_img = pygame.transform.scale(frame_img, (WIDTH, HEIGHT))
+            anim_background_frames.append(frame_img)
+        except Exception as e:
+            print(f"Could not load animation frame {f}: {e}")
+if not anim_background_frames:
+    # Use static fallback if frames folder is empty
+    fallback = load_image("animbackground.png").convert()
+    anim_background_frames = [fallback]
+
+
 
 # Spritesheets for portraits
 try:
@@ -779,7 +796,9 @@ def screen_start_menu():
                         result[0] = "CREDITS"
 
         # Draw
-        screen.blit(background_img, (0, 0))
+        # Cycle through background frames for animation (~15 FPS)
+        frame_idx = int(pulse_timer * 15) % len(anim_background_frames)
+        screen.blit(anim_background_frames[frame_idx], (0, 0))
 
         # Version label
         version_surf = font_small.render("VERSION 1.0", True, (150, 160, 180))
@@ -845,7 +864,9 @@ def screen_matchmaking():
                     transition.start(lambda: None)
 
         # Draw
-        screen.blit(looking_bg, (0, 0))
+        # Cycle through background frames for animation (~15 FPS)
+        frame_idx = int(pulse_timer * 15) % len(anim_background_frames)
+        screen.blit(anim_background_frames[frame_idx], (0, 0))
 
         if not teammate_found:
             pulse_alpha = int((math.sin(pulse_timer * 6) * 0.3 + 0.7) * 255)
@@ -872,9 +893,28 @@ def screen_matchmaking():
         screen.blit(match_surf, match_rect)
 
         if teammate_found:
-            alpha = min(255, int((state_timer - 2.0) * 255 * 2))
-            looking_platforms.set_alpha(alpha)
-            screen.blit(looking_platforms, (0, 0))
+            # Animation timing: pop up over 0.6 seconds
+            progress = min(1.0, (state_timer - 2.0) * 1.6)
+            alpha = int(progress * 255)
+            
+            # Pop up vertical offset (slides from below)
+            pop_offset = int((1.0 - progress) * 80)
+            
+            # Draw Luna (P1)
+            if luna_portrait:
+                luna_p = luna_portrait.copy()
+                luna_p.set_alpha(alpha)
+                lx = 320 - luna_p.get_width() // 2
+                ly = 510 - luna_p.get_height() // 2 + pop_offset
+                screen.blit(luna_p, (lx, ly))
+
+            # Draw Raven (P2)
+            if raven_portrait:
+                raven_p = raven_portrait.copy()
+                raven_p.set_alpha(alpha)
+                rx = 960 - raven_p.get_width() // 2
+                ry = 510 - raven_p.get_height() // 2 + pop_offset
+                screen.blit(raven_p, (rx, ry))
 
             continue_btn = MenuButton("CONTINUE TO LOBBY", WIDTH // 2, 600, 360, 60, selected=True)
             continue_btn.draw(screen, pulse_timer)
@@ -1011,7 +1051,9 @@ def screen_battle_lobby():
                         focus = "arena"
 
         # ── Draw ──
-        screen.blit(looking_bg, (0, 0))
+        # Cycle through background frames for animation (~15 FPS)
+        frame_idx = int(pulse_timer * 15) % len(anim_background_frames)
+        screen.blit(anim_background_frames[frame_idx], (0, 0))
 
         # Dim overlay
         dim = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
