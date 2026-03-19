@@ -397,10 +397,21 @@ class ArenaCard:
         self.votes = 0
         self.selected = False
         self.hover = False
+        
+        # Load map preview image
+        img_name = f"map_{self.name.lower().replace(' ', '')}.png"
+        path = os.path.join("assets", "maps", img_name)
+        try:
+            self.image = pygame.image.load(path).convert_alpha()
+            self.image = pygame.transform.scale(self.image, (width, height))
+            # Darken the image a bit for readability
+            darken = pygame.Surface((width, height), pygame.SRCALPHA)
+            darken.fill((0, 0, 0, 60))
+            self.image.blit(darken, (0, 0))
+        except Exception:
+            self.image = None
 
     def draw(self, surface, time):
-        pulse = math.sin(time * 4) * 0.5 + 0.5
-
         if self.selected:
             border_color = CYAN
             border_w = 4
@@ -412,29 +423,23 @@ class ArenaCard:
             border_color = (60, 70, 90)
             border_w = 2
 
-        # Background (simulate arena preview with colored gradient)
-        s = pygame.Surface((self.rect.w, self.rect.h), pygame.SRCALPHA)
-        for row in range(self.rect.h):
-            t = row / self.rect.h
-            r = int(self.color[0] * (1.0 - t * 0.7))
-            g = int(self.color[1] * (1.0 - t * 0.7))
-            b = int(self.color[2] * (1.0 - t * 0.7))
-            alpha = 160 if self.selected else 120
-            pygame.draw.line(s, (r, g, b, alpha), (0, row), (self.rect.w, row))
-        surface.blit(s, self.rect.topleft)
-
-        # Platform silhouettes for visual interest
-        platform_y = self.rect.y + self.rect.h * 0.6
-        pygame.draw.rect(surface, (40, 50, 60),
-                         (self.rect.x + 20, platform_y, self.rect.w - 40, 8), border_radius=2)
-        pygame.draw.rect(surface, (40, 50, 60),
-                         (self.rect.x + 40, platform_y - 25, 40, 6), border_radius=2)
-        pygame.draw.rect(surface, (40, 50, 60),
-                         (self.rect.x + self.rect.w - 80, platform_y - 25, 40, 6), border_radius=2)
+        # Background
+        if self.image:
+            surface.blit(self.image, self.rect)
+        else:
+            # Fallback gradient
+            s = pygame.Surface((self.rect.w, self.rect.h), pygame.SRCALPHA)
+            for row in range(self.rect.h):
+                t = row / self.rect.h
+                r = int(self.color[0] * (1.0 - t * 0.7))
+                g = int(self.color[1] * (1.0 - t * 0.7))
+                b = int(self.color[2] * (1.0 - t * 0.7))
+                alpha = 160 if self.selected else 120
+                pygame.draw.line(s, (r, g, b, alpha), (0, row), (self.rect.w, row))
+            surface.blit(s, self.rect.topleft)
 
         # Border
         pygame.draw.rect(surface, border_color, self.rect, border_w, border_radius=6)
-
         # Arena name
         draw_outlined_text(surface, self.name, font_tiny, WHITE, self.rect.centerx, self.rect.bottom - 18)
 
@@ -447,11 +452,8 @@ class ArenaCard:
             draw_outlined_text(surface, str(self.votes), font_tiny, WHITE, badge_x, badge_y)
 
 
-# ── Player Display (for lobby) ─────────────────────────────────────────────
-
 class PlayerDisplay:
     """Draws a player portrait + weapon selection in the lobby."""
-
     PLAYER_COLORS = [
         {"hair": (80, 160, 255), "armor": (100, 180, 255), "name": "LUNA"},
         {"hair": (60, 140, 80), "armor": (80, 180, 100), "name": "RAVEN"},
@@ -463,8 +465,6 @@ class PlayerDisplay:
         self.player_id = player_id
         self.rect = pygame.Rect(x, y, width, height)
         self.info = self.PLAYER_COLORS[player_id % len(self.PLAYER_COLORS)]
-
-        # Weapon cards for this player
         card_y = y + 55
         card_x_start = x + 140
         card_spacing = 10
@@ -475,7 +475,6 @@ class PlayerDisplay:
             cx = card_x_start + i * (card_w + card_spacing)
             card = WeaponCard(wname, cx, card_y, card_w, card_h)
             self.weapon_cards.append(card)
-
         self.selected_weapon = 0
         self.weapon_cards[0].selected = True
         self.confirmed = False
@@ -487,48 +486,26 @@ class PlayerDisplay:
         self.weapon_cards[self.selected_weapon].selected = True
 
     def draw(self, surface, time):
-        # Panel background
         draw_panel(surface, (self.rect.x, self.rect.y, self.rect.w, self.rect.h),
                    alpha=180, border_color=LIGHT_BLUE if not self.confirmed else CONFIRM_GREEN)
-
-        # Player portrait (simple pixel-art style character)
         portrait_x = self.rect.x + 15
         portrait_y = self.rect.y + 15
         portrait_w, portrait_h = 110, self.rect.h - 30
-
-        # Player portrait
         portrait_rect = (portrait_x, portrait_y, portrait_w, portrait_h)
         pygame.draw.rect(surface, (15, 20, 35), portrait_rect, border_radius=6)
-        pygame.draw.rect(surface, self.info["armor"], (portrait_x, portrait_y, portrait_w, portrait_h), 2,
-                         border_radius=6)
-
-        # Calculate centers for face/sprite
+        pygame.draw.rect(surface, self.info["armor"], portrait_rect, 2, border_radius=6)
         face_cx = portrait_x + portrait_w // 2
         face_cy = portrait_y + 50
-
         sprite = luna_portrait if self.player_id == 0 else raven_portrait
         if sprite:
             sx = face_cx - sprite.get_width() // 2
             sy = face_cy - 40
             surface.blit(sprite, (sx, sy))
         else:
-            # Simple character face fallback
             pygame.draw.circle(surface, (220, 190, 160), (face_cx, face_cy), 22)
             pygame.draw.ellipse(surface, self.info["hair"], (face_cx - 24, face_cy - 26, 48, 28))
-            pygame.draw.circle(surface, BLACK, (face_cx - 7, face_cy + 2), 4)
-            pygame.draw.circle(surface, BLACK, (face_cx + 7, face_cy + 2), 4)
-            body_y = face_cy + 28
-            pygame.draw.rect(surface, self.info["armor"], (face_cx - 18, body_y, 36, 45), border_radius=4)
-            pygame.draw.rect(surface, tuple(max(0, c - 40) for c in self.info["armor"]),
-                             (face_cx - 18, body_y, 36, 45), 2, border_radius=4)
-
-
-
-        # Player name
         draw_outlined_text(surface, self.info["name"], font_label, WHITE,
                            portrait_x + portrait_w // 2, self.rect.bottom - 22)
-
-        # Section header
         header_x = self.rect.x + 140
         header_y = self.rect.y + 15
         draw_outlined_text(surface, "CHOOSE PRIMARY WEAPON", font_small, LIGHT_BLUE,
