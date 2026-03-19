@@ -70,6 +70,21 @@ looking_bg = load_image("lookingforteammate.png").convert()
 looking_platforms = load_image("lookingforteammateplatforms.png")
 chronos_bg = load_image("chronoscleftsmap.png")
 
+# Spritesheets for portraits
+try:
+    luna_sheet = pygame.image.load(os.path.join("assets", "spritesheet_luna.png")).convert_alpha()
+    raven_sheet = pygame.image.load(os.path.join("assets", "spritesheet_raven.png")).convert_alpha()
+    # Extract first frame (idle) for portraits
+    luna_portrait = luna_sheet.subsurface(pygame.Rect(0, 0, luna_sheet.get_width() // 6, luna_sheet.get_height() // 3))
+    raven_portrait = raven_sheet.subsurface(pygame.Rect(0, 0, raven_sheet.get_width() // 6, raven_sheet.get_height() // 3))
+    luna_portrait = pygame.transform.scale(luna_portrait, (110, 110))
+    raven_portrait = pygame.transform.scale(raven_portrait, (110, 110))
+except Exception as e:
+    print(f"Could not load spritesheets in startmenu: {e}")
+    luna_portrait = None
+    raven_portrait = None
+
+
 # Fonts
 try:
     font_title_large = pygame.font.SysFont("impact", 130)
@@ -481,30 +496,33 @@ class PlayerDisplay:
         portrait_y = self.rect.y + 15
         portrait_w, portrait_h = 110, self.rect.h - 30
 
-        # Portrait background
-        pygame.draw.rect(surface, (15, 20, 35), (portrait_x, portrait_y, portrait_w, portrait_h), border_radius=6)
+        # Player portrait
+        portrait_rect = (portrait_x, portrait_y, portrait_w, portrait_h)
+        pygame.draw.rect(surface, (15, 20, 35), portrait_rect, border_radius=6)
         pygame.draw.rect(surface, self.info["armor"], (portrait_x, portrait_y, portrait_w, portrait_h), 2,
                          border_radius=6)
 
-        # Simple character face
+        # Calculate centers for face/sprite
         face_cx = portrait_x + portrait_w // 2
         face_cy = portrait_y + 50
-        # Head
-        pygame.draw.circle(surface, (220, 190, 160), (face_cx, face_cy), 22)
-        # Hair
-        pygame.draw.ellipse(surface, self.info["hair"],
-                            (face_cx - 24, face_cy - 26, 48, 28))
-        # Eyes
-        pygame.draw.circle(surface, BLACK, (face_cx - 7, face_cy + 2), 4)
-        pygame.draw.circle(surface, BLACK, (face_cx + 7, face_cy + 2), 4)
-        pygame.draw.circle(surface, WHITE, (face_cx - 6, face_cy + 1), 2)
-        pygame.draw.circle(surface, WHITE, (face_cx + 8, face_cy + 1), 2)
 
-        # Body armor
-        body_y = face_cy + 28
-        pygame.draw.rect(surface, self.info["armor"], (face_cx - 18, body_y, 36, 45), border_radius=4)
-        pygame.draw.rect(surface, tuple(max(0, c - 40) for c in self.info["armor"]),
-                         (face_cx - 18, body_y, 36, 45), 2, border_radius=4)
+        sprite = luna_portrait if self.player_id == 0 else raven_portrait
+        if sprite:
+            sx = face_cx - sprite.get_width() // 2
+            sy = face_cy - 40
+            surface.blit(sprite, (sx, sy))
+        else:
+            # Simple character face fallback
+            pygame.draw.circle(surface, (220, 190, 160), (face_cx, face_cy), 22)
+            pygame.draw.ellipse(surface, self.info["hair"], (face_cx - 24, face_cy - 26, 48, 28))
+            pygame.draw.circle(surface, BLACK, (face_cx - 7, face_cy + 2), 4)
+            pygame.draw.circle(surface, BLACK, (face_cx + 7, face_cy + 2), 4)
+            body_y = face_cy + 28
+            pygame.draw.rect(surface, self.info["armor"], (face_cx - 18, body_y, 36, 45), border_radius=4)
+            pygame.draw.rect(surface, tuple(max(0, c - 40) for c in self.info["armor"]),
+                             (face_cx - 18, body_y, 36, 45), 2, border_radius=4)
+
+
 
         # Player name
         draw_outlined_text(surface, self.info["name"], font_label, WHITE,

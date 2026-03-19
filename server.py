@@ -19,36 +19,39 @@ lock = threading.Lock()
 def handle_client(conn, addr):
     try:
         conn.sendall(b"Welkom! Stuur je naam:\n")
-        name = conn.recv(1024).decode().strip()
-        if not name:
-                conn.close()
-                return
-
+        name_data = conn.recv(1024).decode().strip()
+        if not name_data:
+            conn.close()
+            return
+        
+        name = name_data
         with lock:
             if len(clients) >= MAX_PLAYERS:
                 conn.sendall(b"Server vol\n")
                 conn.close()
                 return
             clients[conn] = name
-            game_state["players"][name] = {"x": 0,"y": 0}
+            game_state["players"][name] = {}
             client_inputs[name] = None
             print(f"{name} connected from {addr}")
 
         while True:
-            data = conn.recv(1024)
+            data = conn.recv(4096)
             if not data:
                 break
             try:
-                move = json.loads(data.decode())
+                # Receive full player state snapshot
+                state = json.loads(data.decode())
                 with lock:
-                    client_inputs[name] = move
+                    game_state["players"][name] = state
             except json.JSONDecodeError:
-                conn.sendall(b"Verstuur JSON in formaat: {dx:..., dy:...}\n")
+                pass
     finally:
         with lock:
             if conn in clients:
                 print(f"{clients[conn]} disconnected")
-                del game_state["players"][clients[conn]]
+                if clients[conn] in game_state["players"]:
+                    del game_state["players"][clients[conn]]
                 del client_inputs[clients[conn]]
                 del clients[conn]
         conn.close()
@@ -57,20 +60,14 @@ def game_loop():
     while True:
         time.sleep(TICK_RATE)
         with lock:
-            for name, move in client_inputs.items():
-                if move:
-                    player = game_state["players"][name]
-                    player["x"] += move.get("dx", 0)
-                    player["y"] += move.get("dy", 0)
-
+            # Simply broadcast the overall game state to all clients
             state_json = json.dumps(game_state).encode()
             for conn in clients:
                 try:
                     conn.sendall(state_json + b"\n")
                 except:
                     pass
-            for name in client_inputs:
-                client_inputs[name] = None
+
 
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -26,6 +26,16 @@ WIDTH, HEIGHT = 1280, 720
 FPS = 60
 TILE_SIZE = 48
 
+# Map Mapping (ID -> Asset Name)
+ARENA_MAPS = {
+    0: "map_aethercleft.png",
+    1: "map_nebulashards.png",
+    2: "map_chronosgears.png",
+    3: "map_gravitywell.png",
+    4: "map_cometcauseway.png",
+    5: "map_voidvortex.png",
+}
+
 # Physics
 GRAVITY = 1800          # px/s²  — tune freely
 TERMINAL_VELOCITY = 900 # px/s   — max fall speed
@@ -54,18 +64,48 @@ TILE_COLOR = (80,  90,  110)
 
 # Networking helpers (thin wrapper — server.py handles the heavy lifting)
 
+# --- Sprite / Animation Helpers ---
+
+class SpritesheetHandler:
+    def __init__(self, path: str, cols: int = 6, rows: int = 3):
+        try:
+            self.sheet = pygame.image.load(path).convert_alpha()
+        except Exception:
+            # Fallback to a tiny blank surface if asset missing
+            self.sheet = pygame.Surface((1, 1), pygame.SRCALPHA)
+        self.w, self.h = self.sheet.get_size()
+        self.cols, self.rows = cols, rows
+        self.frame_w = self.w // cols
+        self.frame_h = self.h // rows
+        self.frames = []
+        for r in range(rows):
+            for c in range(cols):
+                rect = pygame.Rect(c * self.frame_w, r * self.frame_h, self.frame_w, self.frame_h)
+                # Ensure we don't go out of bounds if sheet isn't exact
+                if rect.right <= self.w and rect.bottom <= self.h:
+                    self.frames.append(self.sheet.subsurface(rect))
+                else:
+                    self.frames.append(pygame.Surface((self.frame_w, self.frame_h), pygame.SRCALPHA))
+
+    def get_frame(self, index: int) -> pygame.Surface:
+        if 0 <= index < len(self.frames):
+            return self.frames[index]
+        return self.frames[0]
+
+
 class NetworkClient:
     """
     Sends local player state to the server, receives opponent state back.
     All socket I/O runs on a background thread so the game loop never blocks.
     """
 
-    def __init__(self, host: str = "localhost", port: int = 5555):
+    def __init__(self, host: str = "localhost", port: int = 12345):
         self.host = host
         self.port = port
         self.sock: socket.socket | None = None
         self.connected = False
         self.incoming: dict = {}   # latest snapshot from server
+        self.player_name = f"Player_{threading.get_ident() % 1000}"
         self._lock = threading.Lock()
 
     def connect(self) -> bool:
@@ -73,6 +113,10 @@ class NetworkClient:
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.connect((self.host, self.port))
+            # Handshake: Receive welcome, send name
+            self.sock.recv(1024) # Skip "Welkom!"
+            self.sock.sendall(self.player_name.encode() + b"\n")
+            
             self.connected = True
             threading.Thread(target=self._recv_loop, daemon=True).start()
             return True
@@ -105,8 +149,14 @@ class NetworkClient:
                     line, buffer = buffer.split(b"\n", 1)
                     snapshot = json.loads(line.decode())
                     with self._lock:
-                        self.incoming = snapshot
-            except OSError:
+                        # Server sends game_state = {"players": {"name": state}}
+                        players = snapshot.get("players", {})
+                        # Filter for the FIRST other player (simple 2-player assumption)
+                        for name, state in players.items():
+                            if name != self.player_name:
+                                self.incoming = state
+                                break
+            except Exception:
                 break
         self.connected = False
 
@@ -155,6 +205,15 @@ class Fighter(ABC):
         self.jump_buffer   = 0.0
         self.jumps_left    = 2       # double-jump
 
+        # Sprite & Animation setup
+        sheet_path = "assets/spritesheet_luna.png" if player_id == 0 else "assets/spritesheet_raven.png"
+        self.sprite_handler = SpritesheetHandler(sheet_path)
+        
+        self.anim_state = "idle"
+        self.anim_frame = 0
+        self.anim_timer = 0.0
+        self.anim_speed = 0.15 # seconds per frame
+
         # Dash mechanics
         self.dashing         = False
         self.dash_timer      = 0.0
@@ -164,6 +223,11 @@ class Fighter(ABC):
         # Rect for collision (updated every frame)
         self.rect = pygame.Rect(int(self.x), int(self.y), self.width, self.height)
 
+        # Animation state locks
+        self.attack_timer = 0.0
+        self.attack_duration = 0.4
+
+
   
     #  Abstract interface                                                  #
 
@@ -172,13 +236,46 @@ class Fighter(ABC):
     def special_move(self, direction: int) -> None:
         """Weapon-specific special action (sword slash, arrow shot, etc.)."""
 
-    @abstractmethod
-    def draw_character(self, surface: pygame.Surface, camera_x: int, camera_y: int) -> None:
-        """Draw the fighter sprite/shape."""
+    def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        """Draw the animated sprite."""
+        rx = int(self.x) - cam_x
+        ry = int(self.y) - cam_y
+        
+        # Animation data
+        anims = {
+            "idle": [0, 1],
+            "run":  [2, 3, 4, 5],
+            "jump": [6, 7],
+            "fall": [8, 9],
+            "dash": [10],
+            "hurt": [16],
+            "attack": [12, 13],
+            "shield": [17]
+        }
+        frames = anims.get(self.anim_state, [0])
+        frame_idx = frames[self.anim_frame % len(frames)]
+        
+        sprite = self.sprite_handler.get_frame(frame_idx)
+        
+        # Flip if facing left
+        if not self.facing_right:
+            sprite = pygame.transform.flip(sprite, True, False)
+        
+        # Scale to match fighter height (60px)
+        # Original frames are ~124px tall, let's keep aspect ratio roughly
+        scale = self.height / self.sprite_handler.frame_h * 1.8 # 1.8x for extra juice
+        sw = int(self.sprite_handler.frame_w * scale)
+        sh = int(self.sprite_handler.frame_h * scale)
+        sprite = pygame.transform.scale(sprite, (sw, sh))
+        
+        # Draw centered horizontally, feet on bottom of rect
+        draw_x = rx + self.width // 2 - sw // 2
+        draw_y = ry + self.height - sh + 5 # slight offset for feet depth
+        
+        surface.blit(sprite, (draw_x, draw_y))
 
- 
+
     #  Physics update — called once per frame                             #
- 
 
     def update(self, dt: float, tiles: list["Tile"]) -> None:
         """Main physics step."""
@@ -195,12 +292,65 @@ class Fighter(ABC):
 
         # Sync rect
         self.rect.topleft = (int(self.x), int(self.y))
+        self._update_animation(dt)
+
+    def _update_animation(self, dt: float) -> None:
+        # Determine state
+        prev_state = self.anim_state
+        if self.attack_timer > 0:
+            self.anim_state = "attack"
+        elif self.damage_pct > 100 and self.kb_vx != 0: # Hit stun / high knockback
+            self.anim_state = "hurt"
+        elif self.dashing:
+            self.anim_state = "dash"
+        elif not self.on_ground:
+            if self.vy < 0:
+                self.anim_state = "jump"
+            else:
+                self.anim_state = "fall"
+        elif abs(self.vx) > 10:
+            self.anim_state = "run"
+        else:
+            self.anim_state = "idle"
+
+
+        if self.anim_state != prev_state:
+            self.anim_frame = 0
+            self.anim_timer = 0.0
+
+        # Update frame
+        self.anim_timer += dt
+        
+        # Frame indices mapping (based on sheets)
+        anims = {
+            "idle": [0, 1],
+            "run":  [2, 3, 4, 5],
+            "jump": [6, 7],
+            "fall": [8, 9],
+            "dash": [10],
+            "hurt": [16],
+            "attack": [12, 13], # triggered by special_move normally
+            "shield": [17]
+        }
+        
+        frames = anims.get(self.anim_state, [0])
+        
+        # Adjust speed
+        speed = self.anim_speed
+        if self.anim_state == "run":
+            speed = 0.1
+        
+        if self.anim_timer >= speed:
+            self.anim_timer = 0.0
+            self.anim_frame = (self.anim_frame + 1) % len(frames)
 
     def _update_timers(self, dt: float) -> None:
         if not self.on_ground:
             self.coyote_timer = max(0.0, self.coyote_timer - dt)
         self.jump_buffer   = max(0.0, self.jump_buffer   - dt)
         self.dash_cooldown = max(0.0, self.dash_cooldown - dt)
+        self.attack_timer  = max(0.0, self.attack_timer  - dt)
+
         if self.dashing:
             self.dash_timer -= dt
             if self.dash_timer <= 0:
@@ -245,13 +395,13 @@ class Fighter(ABC):
         self.rect.y = int(self.y)
         for tile in tiles:
             if self.rect.colliderect(tile.rect):
-                if total_vy > 0:                  # falling → land
+                if total_vy > 0:                  # falling ➔ land
                     self.rect.bottom = tile.rect.top
                     self.vy    = 0
                     self.kb_vy = 0
                     self.on_ground  = True
                     self.jumps_left = 2
-                elif total_vy < 0:                # rising → hit ceiling
+                elif total_vy < 0:                # rising ➔ hit ceiling
                     self.rect.top = tile.rect.bottom
                     self.vy    = 0
                     self.kb_vy = 0
@@ -322,7 +472,7 @@ class Fighter(ABC):
     def receive_knockback(self, source_x: float, power: float) -> None:
         """
         Apply Smash-style knockback.
-        Higher damage_pct → more knockback received.
+        Higher damage_pct ➔ more knockback received.
         """
         scale = (1 + self.damage_pct / 50) / self.WEIGHT
         direction = 1 if self.x >= source_x else -1
@@ -385,6 +535,181 @@ class Fighter(ABC):
         surface.blit(surf, (px, py))
 
 
+class HUD:
+    """
+    Enhanced HUD with health bars, timer, stocks, and winner banners.
+    Includes character portraits from the spritesheets.
+    """
+    PLAYER_COLORS = [(120, 180, 255), (100, 220, 130), (220, 100, 100)]
+    PLAYER_NAMES  = ["LUNA", "RAVEN", "TITAN"]
+
+    def __init__(self, fighters: list["Fighter"], match_time: float = 120.0):
+        self.fighters = fighters
+        self.match_timer = match_time
+        self.stocks = [3 for _ in fighters]
+        self.winner = None
+        self.winner_timer = 0.0
+        self.arena_name = "AETHER CLEFT"
+        self.time_acc = 0.0
+
+        # Pre-render fonts
+        pygame.font.init()
+        self.font_timer  = pygame.font.SysFont("impact", 48)
+        self.font_label  = pygame.font.SysFont("impact", 22)
+        self.font_tiny   = pygame.font.SysFont("impact", 18)
+        self.font_winner = pygame.font.SysFont("impact", 86)
+
+    def update(self, dt: float) -> None:
+        self.time_acc += dt
+        if self.match_timer > 0 and self.winner is None:
+            self.match_timer -= dt
+        if self.winner is not None:
+            self.winner_timer += dt
+
+    def set_winner(self, player_index: int) -> None:
+        self.winner = player_index
+        self.winner_timer = 0.0
+
+    def lose_stock(self, player_index: int) -> None:
+        if player_index < len(self.stocks):
+            self.stocks[player_index] = max(0, self.stocks[player_index] - 1)
+            if self.stocks[player_index] <= 0:
+                # The OTHER player wins
+                winner = 1 - player_index if len(self.fighters) == 2 else 0
+                self.set_winner(winner)
+
+    def draw(self, surface: pygame.Surface) -> None:
+        self._draw_player_panel(surface, 0, left=True)
+        if len(self.fighters) > 1:
+            self._draw_player_panel(surface, 1, left=False)
+        self._draw_timer(surface)
+        self._draw_stocks(surface)
+        self._draw_arena_banner(surface)
+        if self.winner is not None:
+            self._draw_winner_overlay(surface)
+
+    def _draw_outlined(self, surface, text, font, color, x, y, outline=BLACK,
+                       ow=2, anchor="center"):
+        """Helper to draw outlined text."""
+        outline_s = font.render(text, True, outline)
+        text_s = font.render(text, True, color)
+        for ox in range(-ow, ow + 1):
+            for oy in range(-ow, ow + 1):
+                if ox == 0 and oy == 0: continue
+                if anchor == "center":
+                    r = outline_s.get_rect(center=(x + ox, y + oy))
+                elif anchor == "midleft":
+                    r = outline_s.get_rect(midleft=(x + ox, y + oy))
+                else:
+                    r = outline_s.get_rect(topleft=(x + ox, y + oy))
+                surface.blit(outline_s, r)
+        if anchor == "center":
+            r = text_s.get_rect(center=(x, y))
+        elif anchor == "midleft":
+            r = text_s.get_rect(midleft=(x, y))
+        else:
+            r = text_s.get_rect(topleft=(x, y))
+        surface.blit(text_s, r)
+
+    def _draw_player_panel(self, surface, idx, left=True):
+        """Draw an individual player's top HUD panel."""
+        f = self.fighters[idx] if idx < len(self.fighters) else None
+        if f is None: return
+
+        panel_w, panel_h = 320, 80
+        margin = 20
+        px = margin if left else WIDTH - panel_w - margin
+        py = 15
+
+        # Panel bg
+        s = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        s.fill((10, 15, 30, 200))
+        surface.blit(s, (px, py))
+        border_c = self.PLAYER_COLORS[idx % len(self.PLAYER_COLORS)]
+        pygame.draw.rect(surface, (60, 70, 90), (px, py, panel_w, panel_h), 2, border_radius=4)
+
+        # Portrait
+        ps = 56
+        port_x = px + 8 if left else px + panel_w - ps - 8
+        port_y = py + (panel_h - ps) // 2
+        pygame.draw.rect(surface, (20, 25, 40), (port_x, port_y, ps, ps), border_radius=6)
+        pygame.draw.rect(surface, border_c, (port_x, port_y, ps, ps), 2, border_radius=6)
+
+        # Draw character face from spritesheet (frame 0 is idle)
+        portrait = f.sprite_handler.get_frame(0)
+        # Crop head slightly if possible, or just scale the whole thing down
+        sf = min(ps / f.sprite_handler.frame_w, ps / f.sprite_handler.frame_h) * 1.5
+        portrait = pygame.transform.scale(portrait, (int(f.sprite_handler.frame_w * sf), int(f.sprite_handler.frame_h * sf)))
+        if not f.facing_right and left: # Flip for the left panel if character faces right by default
+            portrait = pygame.transform.flip(portrait, True, False)
+        
+        # Center in portrait box
+        ix = port_x + ps//2 - portrait.get_width()//2
+        iy = port_y + ps//2 - portrait.get_height()//2
+        surface.blit(portrait, (ix, iy), special_flags=pygame.BLEND_ALPHA_SDL2)
+
+        # Name
+        name = self.PLAYER_NAMES[idx % len(self.PLAYER_NAMES)]
+        name_x = port_x + ps + 12 if left else px + 10
+        self._draw_outlined(surface, name, self.font_label, WHITE, name_x, py + 18, anchor="midleft")
+
+        # Health bar
+        bar_w, bar_h = 180, 18
+        bar_x = port_x + ps + 12 if left else px + 10
+        bar_y = py + 42
+
+        pygame.draw.rect(surface, (30, 30, 40), (bar_x, bar_y, bar_w, bar_h), border_radius=3)
+
+        pct = f.damage_pct
+        fill_ratio = max(0, 1.0 - pct / 150.0)
+        bar_c = GREEN if pct < 40 else YELLOW if pct < 80 else ORANGE if pct < KO_PERCENTAGE else RED
+
+        fill_w = int(bar_w * fill_ratio)
+        if fill_w > 0:
+            pygame.draw.rect(surface, bar_c, (bar_x, bar_y, fill_w, bar_h), border_radius=3)
+        pygame.draw.rect(surface, (100, 110, 130), (bar_x, bar_y, bar_w, bar_h), 2, border_radius=3)
+
+        # Percentage text
+        pct_color = WHITE if pct < 60 else (ORANGE if pct < KO_PERCENTAGE else RED)
+        self._draw_outlined(surface, f"{int(pct)}%", self.font_label, pct_color,
+                            bar_x + bar_w + 22, bar_y + bar_h // 2)
+
+    def _draw_timer(self, surface):
+        minutes = int(self.match_timer) // 60
+        seconds = int(self.match_timer) % 60
+        t_text = f"{minutes}:{seconds:02d}"
+        color = WHITE
+        if self.match_timer < 30:
+            pulse = math.sin(self.time_acc * 6) * 0.5 + 0.5
+            color = (255, int(100 + pulse * 100), int(pulse * 80))
+        ts = self.font_timer.render(t_text, True, color)
+        surface.blit(ts, ts.get_rect(center=(WIDTH // 2, 48)))
+
+    def _draw_stocks(self, surface):
+        s1 = self.stocks[0] if len(self.stocks) > 0 else 0
+        s2 = self.stocks[1] if len(self.stocks) > 1 else 0
+        self._draw_outlined(surface, f"STOCKS: {s1} vs {s2}", self.font_tiny,
+                            (153, 230, 255), WIDTH // 2, 90)
+
+    def _draw_arena_banner(self, surface):
+        bw, bh = 300, 34
+        bx, by = WIDTH // 2 - bw // 2, HEIGHT - 38
+        s = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        s.fill((0, 0, 0, 180))
+        surface.blit(s, (bx, by))
+        pygame.draw.rect(surface, (80, 90, 110), (bx, by, bw, bh), 2, border_radius=4)
+        self._draw_outlined(surface, self.arena_name, self.font_tiny,
+                            (153, 230, 255), WIDTH // 2, by + bh // 2)
+
+    def _draw_winner_overlay(self, surface):
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 160))
+        surface.blit(overlay, (0, 0))
+        name = self.PLAYER_NAMES[self.winner % len(self.PLAYER_NAMES)]
+        self._draw_outlined(surface, f"{name} WINS!", self.font_winner, YELLOW, WIDTH // 2, HEIGHT // 2 - 30)
+        self._draw_outlined(surface, "PRESS ENTER TO CONTINUE", self.font_label, WHITE, WIDTH // 2, HEIGHT // 2 + 50)
+
+
 # 
 # Concrete fighter subclasses  (one per weapon type)
 
@@ -401,14 +726,20 @@ class SwordFighter(Fighter):
         if not self.dashing:
             self.vx = direction * 700
             self.vy = -100
+            self.anim_state = "attack"
+            self.anim_frame = 0
+            self.anim_timer = 0.0
+            self.attack_timer = self.attack_duration
+
 
     def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        super().draw_character(surface, cam_x, cam_y)
+        # Optional: Add weapon effects
         rx = int(self.x) - cam_x
         ry = int(self.y) - cam_y
-        pygame.draw.rect(surface, self.COLOR, (rx, ry, self.width, self.height), border_radius=6)
-        # Sword indicator
-        sx = rx + (self.width if self.facing_right else -14)
-        pygame.draw.rect(surface, YELLOW, (sx, ry + 10, 14, 6), border_radius=2)
+        if self.anim_state == "attack":
+            sx = rx + (self.width if self.facing_right else -20)
+            pygame.draw.rect(surface, YELLOW, (sx, ry + 15, 20, 10), border_radius=3)
 
 
 class BowFighter(Fighter):
@@ -422,16 +753,20 @@ class BowFighter(Fighter):
         """Quick back-hop to create distance."""
         self.vx = -direction * 500
         self.vy = -300
+        self.anim_state = "attack"
+        self.anim_frame = 0
+        self.attack_timer = self.attack_duration
+
 
     def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        super().draw_character(surface, cam_x, cam_y)
         rx = int(self.x) - cam_x
         ry = int(self.y) - cam_y
-        pygame.draw.rect(surface, self.COLOR, (rx, ry, self.width, self.height), border_radius=6)
-        # Bow arc indicator
-        cx = rx + (self.width + 4 if self.facing_right else -4)
-        pygame.draw.arc(surface, ORANGE,
-                        (cx - 8, ry + 5, 16, self.height - 10),
-                        math.pi * 0.25, math.pi * 0.75, 3)
+        if self.anim_state == "attack":
+            cx = rx + (self.width + 4 if self.facing_right else -4)
+            pygame.draw.arc(surface, ORANGE,
+                            (cx - 8, ry + 5, 16, self.height - 10),
+                            math.pi * 0.25, math.pi * 0.75, 3)
 
 
 class HammerFighter(Fighter):
@@ -446,14 +781,18 @@ class HammerFighter(Fighter):
         if not self.on_ground:
             self.vy = DASH_SPEED
             self.kb_vy = 0
+            self.anim_state = "attack"
+            self.anim_frame = 0
+            self.attack_timer = self.attack_duration
+
 
     def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        super().draw_character(surface, cam_x, cam_y)
         rx = int(self.x) - cam_x
         ry = int(self.y) - cam_y
-        pygame.draw.rect(surface, self.COLOR, (rx, ry, self.width, self.height), border_radius=4)
-        # Hammer head
-        hx = rx + (self.width if self.facing_right else -20)
-        pygame.draw.rect(surface, (180, 60, 60), (hx, ry, 20, 26), border_radius=4)
+        if self.anim_state == "attack":
+            hx = rx + (self.width if self.facing_right else -20)
+            pygame.draw.rect(surface, (180, 60, 60), (hx, ry, 20, 26), border_radius=4)
 
 
 # Arena tile
@@ -483,38 +822,33 @@ class Tile:
 
 def build_arena(arena_id: int = 0) -> list[Tile]:
     """Return a list of Tiles for the chosen arena."""
+    tiles = []
 
-    if arena_id == 0:
-        # --- Classic flat stage ---
-        tiles = []
-        # Main floor
-        for i in range(26):
-            tiles.append(Tile(i * TILE_SIZE + 20, 580))
-        # Side platforms
-        for i in range(5):
-            tiles.append(Tile(120 + i * TILE_SIZE, 430))
-            tiles.append(Tile(840 + i * TILE_SIZE, 430))
-        # Center platform
-        for i in range(7):
-            tiles.append(Tile(490 + i * TILE_SIZE, 350))
-        return tiles
+    # Common helper to add a platform of tiles
+    def add_platform(x_start: int, y_pos: int, num_tiles: int):
+        for i in range(num_tiles):
+            tiles.append(Tile(x_start + i * TILE_SIZE, y_pos))
 
-    elif arena_id == 1:
-        # --- Floating islands ---
-        tiles = []
-        for i in range(6):
-            tiles.append(Tile(80  + i * TILE_SIZE, 600))
-            tiles.append(Tile(760 + i * TILE_SIZE, 600))
-        for i in range(4):
-            tiles.append(Tile(300 + i * TILE_SIZE, 460))
-            tiles.append(Tile(600 + i * TILE_SIZE, 380))
-        for i in range(3):
-            tiles.append(Tile(430 + i * TILE_SIZE, 260))
-        return tiles
+    # Layout based on visual analysis of assets/maps/map_*.png
+    # Most maps (0, 1, 2, 4, 5) use the "Tournament" layout (Main + 4 slots)
+    # Gravity Well (3) uses a single large platform.
 
+    if arena_id == 3: # Gravity Well: Single large platform
+        add_platform(240, 560, 17)
     else:
-        # Fallback: simple ground
-        return [Tile(i * TILE_SIZE, 600) for i in range(26)]
+        # Main large platform (centered)
+        add_platform(240, 560, 17)
+        
+        # Side platforms
+        # Left side
+        add_platform(120, 410, 4)
+        add_platform(120, 260, 4)
+        
+        # Right side
+        add_platform(968, 410, 4)
+        add_platform(968, 260, 4)
+
+    return tiles
 
 
 
@@ -579,236 +913,6 @@ class InputHandler:
 
 
 
-# HUD
-
-
-class HUD:
-    """
-    Enhanced in-game HUD with player portraits, health bars, timer,
-    stock counter, arena name banner, and winner overlay.
-    """
-
-    PLAYER_NAMES = ["LUNA", "RAVEN", "BLAZE", "SPARK"]
-    PLAYER_COLORS = [(100, 180, 255), (100, 220, 130), (220, 100, 100), (220, 180, 80)]
-    HAIR_COLORS = [(80, 160, 255), (60, 140, 80), (200, 80, 80), (200, 160, 60)]
-
-    def __init__(self, fighters: list[Fighter], stocks: int = 3, arena_name: str = "AETHER CLEFT"):
-        self.fighters = fighters
-        self.stocks = [stocks] * len(fighters)
-        self.match_timer = 120.0
-        self.arena_name = arena_name
-        self.winner = None
-        self.winner_timer = 0.0
-        self.time_acc = 0.0
-        try:
-            self.font_big   = pygame.font.SysFont("impact", 52)
-            self.font_timer = pygame.font.SysFont("impact", 72)
-            self.font_label = pygame.font.SysFont("impact", 28)
-            self.font_small = pygame.font.SysFont("consolas", 22, bold=True)
-            self.font_tiny  = pygame.font.SysFont("consolas", 16, bold=True)
-            self.font_winner = pygame.font.SysFont("impact", 80)
-        except Exception:
-            self.font_big   = pygame.font.Font(None, 56)
-            self.font_timer = pygame.font.Font(None, 76)
-            self.font_label = pygame.font.Font(None, 32)
-            self.font_small = pygame.font.Font(None, 24)
-            self.font_tiny  = pygame.font.Font(None, 18)
-            self.font_winner = pygame.font.Font(None, 84)
-
-    def update(self, dt: float) -> None:
-        """Update timer and check for winner."""
-        self.time_acc += dt
-        if self.match_timer > 0 and self.winner is None:
-            self.match_timer -= dt
-        if self.winner is not None:
-            self.winner_timer += dt
-
-    def set_winner(self, player_index: int) -> None:
-        self.winner = player_index
-        self.winner_timer = 0.0
-
-    def lose_stock(self, player_index: int) -> None:
-        if player_index < len(self.stocks):
-            self.stocks[player_index] = max(0, self.stocks[player_index] - 1)
-            if self.stocks[player_index] <= 0:
-                # The OTHER player wins
-                winner = 1 - player_index if len(self.fighters) == 2 else 0
-                self.set_winner(winner)
-
-    def draw(self, surface: pygame.Surface) -> None:
-        self._draw_player_panel(surface, 0, left=True)
-        if len(self.fighters) > 1:
-            self._draw_player_panel(surface, 1, left=False)
-        self._draw_timer(surface)
-        self._draw_stocks(surface)
-        self._draw_arena_banner(surface)
-        if self.winner is not None:
-            self._draw_winner_overlay(surface)
-
-    def _draw_outlined(self, surface, text, font, color, x, y, outline=BLACK,
-                       ow=2, anchor="center"):
-        """Helper to draw outlined text."""
-        outline_s = font.render(text, True, outline)
-        text_s = font.render(text, True, color)
-        for ox in range(-ow, ow + 1):
-            for oy in range(-ow, ow + 1):
-                if ox == 0 and oy == 0:
-                    continue
-                if anchor == "center":
-                    r = outline_s.get_rect(center=(x + ox, y + oy))
-                elif anchor == "midleft":
-                    r = outline_s.get_rect(midleft=(x + ox, y + oy))
-                else:
-                    r = outline_s.get_rect(topleft=(x + ox, y + oy))
-                surface.blit(outline_s, r)
-        if anchor == "center":
-            r = text_s.get_rect(center=(x, y))
-        elif anchor == "midleft":
-            r = text_s.get_rect(midleft=(x, y))
-        else:
-            r = text_s.get_rect(topleft=(x, y))
-        surface.blit(text_s, r)
-
-    def _draw_player_panel(self, surface, idx, left=True):
-        """Draw an individual player's top HUD panel."""
-        f = self.fighters[idx] if idx < len(self.fighters) else None
-        if f is None:
-            return
-
-        panel_w, panel_h = 320, 80
-        margin = 20
-        px = margin if left else WIDTH - panel_w - margin
-        py = 15
-
-        # Panel bg
-        s = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        s.fill((10, 15, 30, 200))
-        surface.blit(s, (px, py))
-        border_c = self.PLAYER_COLORS[idx % len(self.PLAYER_COLORS)]
-        pygame.draw.rect(surface, (60, 70, 90), (px, py, panel_w, panel_h), 2, border_radius=4)
-
-        # Portrait
-        ps = 56
-        port_x = px + 8 if left else px + panel_w - ps - 8
-        port_y = py + (panel_h - ps) // 2
-        pygame.draw.rect(surface, (20, 25, 40), (port_x, port_y, ps, ps), border_radius=6)
-        pygame.draw.rect(surface, border_c, (port_x, port_y, ps, ps), 2, border_radius=6)
-
-        # Mini face
-        face_cx = port_x + ps // 2
-        face_cy = port_y + ps // 2
-        pygame.draw.circle(surface, (220, 190, 160), (face_cx, face_cy - 3), 14)
-        hc = self.HAIR_COLORS[idx % len(self.HAIR_COLORS)]
-        pygame.draw.ellipse(surface, hc, (face_cx - 16, face_cy - 18, 32, 16))
-        pygame.draw.circle(surface, BLACK, (face_cx - 4, face_cy - 1), 3)
-        pygame.draw.circle(surface, BLACK, (face_cx + 4, face_cy - 1), 3)
-
-        # Name
-        name = self.PLAYER_NAMES[idx % len(self.PLAYER_NAMES)]
-        name_x = port_x + ps + 12 if left else px + 10
-        self._draw_outlined(surface, name, self.font_label, WHITE, name_x, py + 18, anchor="midleft")
-
-        # Health bar
-        bar_w, bar_h = 180, 18
-        bar_x = port_x + ps + 12 if left else px + 10
-        bar_y = py + 42
-
-        pygame.draw.rect(surface, (30, 30, 40), (bar_x, bar_y, bar_w, bar_h), border_radius=3)
-
-        pct = f.damage_pct
-        fill_ratio = max(0, 1.0 - pct / 150.0)
-        if pct < 40:
-            bar_c = GREEN
-        elif pct < 80:
-            bar_c = YELLOW
-        elif pct < KO_PERCENTAGE:
-            bar_c = ORANGE
-        else:
-            bar_c = RED
-
-        fill_w = int(bar_w * fill_ratio)
-        if fill_w > 0:
-            pygame.draw.rect(surface, bar_c, (bar_x, bar_y, fill_w, bar_h), border_radius=3)
-            pygame.draw.rect(surface, tuple(min(255, c + 60) for c in bar_c),
-                             (bar_x, bar_y, fill_w, bar_h // 2), border_radius=3)
-        pygame.draw.rect(surface, (100, 110, 130), (bar_x, bar_y, bar_w, bar_h), 2, border_radius=3)
-
-        # Percentage text
-        pct_color = WHITE if pct < 60 else (ORANGE if pct < KO_PERCENTAGE else RED)
-        self._draw_outlined(surface, f"{int(pct)}%", self.font_label, pct_color,
-                            bar_x + bar_w + 22, bar_y + bar_h // 2)
-
-    def _draw_timer(self, surface):
-        """Large centered match timer."""
-        minutes = int(self.match_timer) // 60
-        seconds = int(self.match_timer) % 60
-        t_text = f"{minutes}:{seconds:02d}"
-
-        if self.match_timer < 30:
-            pulse = math.sin(self.time_acc * 6) * 0.5 + 0.5
-            color = (255, int(100 + pulse * 100), int(pulse * 80))
-        else:
-            color = WHITE
-
-        # Shadow
-        shadow = self.font_timer.render(t_text, True, BLACK)
-        sr = shadow.get_rect(center=(WIDTH // 2 + 3, 48 + 3))
-        surface.blit(shadow, sr)
-
-        ts = self.font_timer.render(t_text, True, color)
-        tr = ts.get_rect(center=(WIDTH // 2, 48))
-        surface.blit(ts, tr)
-
-    def _draw_stocks(self, surface):
-        """Stock indicator below the timer."""
-        s1 = self.stocks[0] if len(self.stocks) > 0 else 0
-        s2 = self.stocks[1] if len(self.stocks) > 1 else 0
-        self._draw_outlined(surface, f"STOCKS: {s1} vs {s2}", self.font_tiny,
-                            (153, 230, 255), WIDTH // 2, 90)
-
-    def _draw_arena_banner(self, surface):
-        """Arena name banner at the bottom."""
-        bw, bh = 300, 34
-        bx, by = WIDTH // 2 - bw // 2, HEIGHT - 38
-        s = pygame.Surface((bw, bh), pygame.SRCALPHA)
-        s.fill((0, 0, 0, 180))
-        surface.blit(s, (bx, by))
-        pygame.draw.rect(surface, (80, 90, 110), (bx, by, bw, bh), 2, border_radius=4)
-        self._draw_outlined(surface, self.arena_name, self.font_tiny,
-                            (153, 230, 255), WIDTH // 2, by + bh // 2)
-
-    def _draw_winner_overlay(self, surface):
-        """Dramatic winner announcement."""
-        alpha = min(180, int(self.winner_timer * 200))
-        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, alpha))
-        surface.blit(overlay, (0, 0))
-
-        if self.winner_timer > 0.5:
-            name = self.PLAYER_NAMES[self.winner % len(self.PLAYER_NAMES)]
-            pulse = math.sin(self.time_acc * 3) * 0.3 + 0.7
-
-            # Winner text with outline
-            win_text = f"{name} WINS!"
-            for ox in range(-4, 5):
-                for oy in range(-4, 5):
-                    if abs(ox) + abs(oy) > 5:
-                        continue
-                    ws = self.font_winner.render(win_text, True, BLACK)
-                    wr = ws.get_rect(center=(WIDTH // 2 + ox, HEIGHT // 2 - 30 + oy))
-                    surface.blit(ws, wr)
-            ws = self.font_winner.render(win_text, True, YELLOW)
-            wr = ws.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30))
-            surface.blit(ws, wr)
-
-            if self.winner_timer > 1.5:
-                pa = int(pulse * 255)
-                cont = self.font_label.render("PRESS ENTER TO CONTINUE", True, (pa, pa, pa))
-                cr = cont.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 50))
-                surface.blit(cont, cr)
-
-
-
 # Main game loop
 
 
@@ -828,6 +932,18 @@ class Game:
         self.clock = pygame.time.Clock()
 
         self.tiles = build_arena(arena_id)
+
+        # Background loading
+        self.bg_image = None
+        bg_filename = ARENA_MAPS.get(arena_id)
+        if bg_filename:
+            import os
+            path = os.path.join("assets", "maps", bg_filename)
+            try:
+                self.bg_image = pygame.image.load(path).convert()
+                self.bg_image = pygame.transform.scale(self.bg_image, (WIDTH, HEIGHT))
+            except Exception as e:
+                print(f"Could not load map background {path}: {e}")
 
         # Local player is always index 0
         self.local_fighter  = fighter_cls_local( 300, 400, player_id=0)
@@ -908,12 +1024,15 @@ class Game:
 
     def _draw(self, dt: float) -> None:
         # Background
-        self.screen.fill(self.bg_color)
-        self._draw_stars()
+        if self.bg_image:
+            self.screen.blit(self.bg_image, (0, 0))
+        else:
+            self.screen.fill(self.bg_color)
+            self._draw_stars()
 
-        # Tiles
-        for tile in self.tiles:
-            tile.draw(self.screen)
+        # Tiles (invisible collision tiles for map art)
+        # for tile in self.tiles:
+        #     tile.draw(self.screen)
 
         # Fighters
         for fighter in self.fighters:
@@ -940,7 +1059,7 @@ def main() -> None:
     pygame.init()
 
     # Attempt to connect to server (optional — game runs offline too)
-    net = NetworkClient(host="localhost", port=5555)
+    net = NetworkClient(host="localhost", port=12345)
     connected = net.connect()
     if not connected:
         print("[client] No server found — running in local/offline mode.")
