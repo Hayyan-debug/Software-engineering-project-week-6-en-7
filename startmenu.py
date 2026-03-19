@@ -14,6 +14,7 @@ import pygame
 import sys
 import math
 import os
+import asyncio
 
 # Initialize Pygame
 pygame.init()
@@ -746,7 +747,7 @@ class GameHUD:
 
 # ── Screen: Start Menu ────────────────────────────────────────────────────
 
-def screen_start_menu():
+async def screen_start_menu():
     """The main start menu screen. Returns the action chosen."""
     buttons = [
         MenuButton("START GAME", WIDTH // 2, 560, 240, 55),
@@ -794,6 +795,8 @@ def screen_start_menu():
                         transition.start(lambda: None)
                     elif selected == 3:
                         result[0] = "CREDITS"
+        # Yield control for pygbag/browser
+        await asyncio.sleep(0)
 
         # Draw
         # Cycle through background frames for animation (~15 FPS)
@@ -835,9 +838,32 @@ def screen_start_menu():
     return "QUIT"
 
 
+# ── Screen: Credits ──────────────────────────────────────────────────────────
+
+async def screen_credits():
+    """Simple credits screen with back button."""
+    running = True
+    pulse_timer = 0
+    while running:
+        await asyncio.sleep(0)
+        dt = clock.tick(FPS) / 1000.0
+        pulse_timer += dt
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                running = False
+        
+        # Simple draw
+        screen.fill(BG_COLOR)
+        draw_outlined_text(screen, "GAUNTLET GALAXY", font_title_small, WHITE, WIDTH // 2, 120)
+        draw_outlined_text(screen, "BY THIJS, HAYYAN & FINN", font_subheader, LIGHT_BLUE, WIDTH // 2, 220)
+        draw_outlined_text(screen, "BUILT WITH PYGAME", font_label, GRAY, WIDTH // 2, 340)
+        draw_outlined_text(screen, "PRESS ESC TO RETURN", font_tiny, WHITE, WIDTH // 2, HEIGHT - 100)
+        pygame.display.flip()
+
+
 # ── Screen: Matchmaking ────────────────────────────────────────────────────
 
-def screen_matchmaking():
+async def screen_matchmaking():
     """Matchmaking / looking-for-teammate screen. Returns when teammate found."""
     state_timer = 0
     pulse_timer = 0
@@ -847,6 +873,8 @@ def screen_matchmaking():
 
     running = True
     while running:
+        # Yield control for pygbag/browser
+        await asyncio.sleep(0)
         dt = clock.tick(FPS) / 1000.0
         pulse_timer += dt
         state_timer += dt
@@ -930,7 +958,7 @@ def screen_matchmaking():
 
 # ── Screen: Battle Lobby (Weapon Select + Arena Vote) ──────────────────────
 
-def screen_battle_lobby():
+async def screen_battle_lobby():
     """Combined weapon select + arena vote screen. Returns selections."""
     # Player displays (2 players)
     p1_display = PlayerDisplay(0, 40, 100, 520, 200)
@@ -970,6 +998,8 @@ def screen_battle_lobby():
 
     running = True
     while running:
+        # Yield control for pygbag/browser
+        await asyncio.sleep(0)
         dt = clock.tick(FPS) / 1000.0
         pulse_timer += dt
         deploy_timer -= dt
@@ -1134,23 +1164,29 @@ def screen_battle_lobby():
 
 # ── Main Flow ──────────────────────────────────────────────────────────────
 
-def main_menu():
+async def main_menu():
     """Complete game flow: Start Menu → Matchmaking → Lobby → Game."""
 
     # STEP 1: Start Menu
-    action = screen_start_menu()
+    action = await screen_start_menu()
     if action == "QUIT":
         pygame.quit()
         sys.exit()
 
+    if action == "CREDITS":
+        await screen_credits()
+        # After credits, go back to start
+        await main_menu()
+        return
+
     # STEP 2: Matchmaking
-    result = screen_matchmaking()
+    result = await screen_matchmaking()
     if result == "QUIT":
         pygame.quit()
         sys.exit()
 
     # STEP 3: Battle Lobby (weapon select + arena vote)
-    selections = screen_battle_lobby()
+    selections = await screen_battle_lobby()
     if selections is None:
         pygame.quit()
         sys.exit()
@@ -1191,7 +1227,7 @@ def main_menu():
         # Configure the HUD arena name from lobby selection
         game.hud.arena_name = selections["arena_name"].upper()
 
-        game.run()
+        await game.run()
 
     except ImportError as e:
         print(f"Could not import client module: {e}")
@@ -1201,5 +1237,9 @@ def main_menu():
     sys.exit()
 
 
+async def main_menu_async():
+    await main_menu()
+
+
 if __name__ == "__main__":
-    main_menu()
+    asyncio.run(main_menu())

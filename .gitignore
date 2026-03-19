@@ -1,0 +1,14 @@
+# Pygame / Pygbag Build outputs
+build/
+dist/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+*.png
+!assets/**/*.png
+!concept.png
+!startmenu.png
+!uiconcept.png

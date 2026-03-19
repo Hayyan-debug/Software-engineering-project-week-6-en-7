@@ -17,6 +17,7 @@ import json
 import socket
 import threading
 from abc import ABC, abstractmethod
+import asyncio
 
 
 # Constants
@@ -962,10 +963,12 @@ class Game:
         self.stars = [(random.randint(0, WIDTH), random.randint(0, HEIGHT),
                        random.random()) for _ in range(120)]
 
-    def run(self) -> None:
+    async def run(self) -> None:
         """Main loop."""
         running = True
         while running:
+            # Yield control for pygbag/browser
+            await asyncio.sleep(0)
             dt = min(self.clock.tick(FPS) / 1000.0, 0.05)  # cap dt to avoid tunneling
 
             # --- Events ---
