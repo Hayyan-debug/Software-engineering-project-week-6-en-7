@@ -72,6 +72,8 @@ class SpritesheetHandler:
     def __init__(self, path: str, cols: int = 6, rows: int = 3):
         try:
             self.sheet = pygame.image.load(path).convert_alpha()
+
+            self.sheet.set_colorkey((255, 255, 255))
         except Exception:
             # Fallback to a tiny blank surface if asset missing
             self.sheet = pygame.Surface((1, 1), pygame.SRCALPHA)
@@ -729,6 +731,12 @@ class SwordFighter(Fighter):
     def __init__(self, x: float, y: float, player_id: int):
         super().__init__(x, y, player_id)
         self.weapon = Sword()
+        self.sword_sprite_handler = SpritesheetHandler("assets/SwordSpriteSheet3.png", cols=3, rows=3)
+        self.sword_idle_frame = 0
+        self.sword_attack_frames = [1, 2, 3, 4]
+        self.sword_scale = 0.22
+        self.sword_hand_offset_right = (0, 0)
+        self.sword_hand_offset_left = (14, 14)
 
     def special_move(self, direction: int) -> None:
         """Sword swing attack."""
@@ -744,12 +752,38 @@ class SwordFighter(Fighter):
 
     def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         super().draw_character(surface, cam_x, cam_y)
-        # Optional: Add weapon effects
+        self._draw_sword(surface, cam_x, cam_y)
+
+    def _draw_sword(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        if self.attack_timer > 0 and self.sword_attack_frames:
+            attack_progress = 1.0 - (self.attack_timer / max(self.attack_duration, 0.001))
+            attack_progress = max(0.0, min(attack_progress, 0.999))
+            frame_slot = int(attack_progress * len(self.sword_attack_frames))
+            frame_idx = self.sword_attack_frames[frame_slot]
+        else:
+            frame_idx = self.sword_idle_frame
+
+        sword = self.sword_sprite_handler.get_frame(frame_idx)
+        sw = max(1, int(self.sword_sprite_handler.frame_w * self.sword_scale))
+        sh = max(1, int(self.sword_sprite_handler.frame_h * self.sword_scale))
+        sword = pygame.transform.scale(sword, (sw, sh))
+
+        if not self.facing_right:
+            sword = pygame.transform.flip(sword, True, False)
+
         rx = int(self.x) - cam_x
         ry = int(self.y) - cam_y
-        if self.anim_state == "attack":
-            sx = rx + (self.width if self.facing_right else -20)
-            pygame.draw.rect(surface, YELLOW, (sx, ry + 15, 20, 10), border_radius=3)
+        if self.facing_right:
+            hand_x = rx + self.sword_hand_offset_right[0]
+            hand_y = ry + self.sword_hand_offset_right[1]
+            draw_x = hand_x
+        else:
+            hand_x = rx + self.sword_hand_offset_left[0]
+            hand_y = ry + self.sword_hand_offset_left[1]
+            draw_x = hand_x - sw
+
+        draw_y = hand_y - int(sh * 0.45)
+        surface.blit(sword, (draw_x, draw_y))
 
 
 class BowFighter(Fighter):
