@@ -30,7 +30,7 @@ class Weapon(ABC):
         self,
         owner_rect: pygame.Rect,
         facing_right: bool,
-    ) -> list[pygame.Rect]:
+    ) -> list[object]:
         """Attempts an attack and returns active hitbox(es)."""
         if not self.can_attack():
             return []
@@ -38,7 +38,7 @@ class Weapon(ABC):
         return self.attack(owner_rect, facing_right)
 
     @abstractmethod
-    def attack(self, owner_rect: pygame.Rect, facing_right: bool) -> list[pygame.Rect]:
+    def attack(self, owner_rect: pygame.Rect, facing_right: bool) -> list[object]:
         """Perform attack and return newly created hitbox(es)."""
 
     def get_hitboxes(self) -> list[pygame.Rect]:
