@@ -19,6 +19,8 @@ import threading
 from abc import ABC, abstractmethod
 import asyncio
 
+from src.combat.bow import Bow
+from src.combat.projectile import Projectile
 from src.combat.sword import Sword
 
 # Constants
@@ -231,6 +233,7 @@ class Fighter(ABC):
         self.attack_timer = 0.0
         self.attack_duration = 0.4
         self.weapon = None
+        self.pending_attacks: list[object] = []
 
 
   
@@ -240,6 +243,11 @@ class Fighter(ABC):
     @abstractmethod
     def special_move(self, direction: int) -> None:
         """Weapon-specific special action (sword slash, arrow shot, etc.)."""
+
+    def consume_pending_attacks(self) -> list[object]:
+        attacks = self.pending_attacks
+        self.pending_attacks = []
+        return attacks
 
     def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         """Draw the animated sprite."""
@@ -793,13 +801,20 @@ class BowFighter(Fighter):
     WEIGHT     = 0.85
     COLOR      = (100, 220, 130)
 
+    def __init__(self, x: float, y: float, player_id: int):
+        super().__init__(x, y, player_id)
+        self.weapon = Bow()
+
     def special_move(self, direction: int) -> None:
-        """Quick back-hop to create distance."""
-        self.vx = -direction * 500
-        self.vy = -300
-        self.anim_state = "attack"
-        self.anim_frame = 0
-        self.attack_timer = self.attack_duration
+        """Fire a bow projectile."""
+        if self.weapon is None:
+            return
+        attacks = self.weapon.try_attack(self.rect, self.facing_right)
+        if attacks:
+            self.pending_attacks.extend(attacks)
+            self.anim_state = "attack"
+            self.anim_frame = 0
+            self.attack_timer = self.attack_duration
 
 
     def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
@@ -998,6 +1013,7 @@ class Game:
         self.hud           = HUD(self.fighters)
         self.net           = net
         self._weapon_hit_registry: dict[int, set[int]] = {}
+        self.projectiles: list[tuple[Fighter, Projectile]] = []
 
         # Background (solid color fallback if no asset)
         self.bg_color = BG_COLOR
@@ -1028,6 +1044,8 @@ class Game:
 
             # --- Input ---
             self.input_handler.process(self.local_fighter, keys, events)
+            for fighter in self.fighters:
+                self._spawn_projectiles_from_attacks(fighter, fighter.consume_pending_attacks())
 
             # --- Physics update ---
             for fighter in self.fighters:
@@ -1036,6 +1054,7 @@ class Game:
             # --- Knockback on player collision ---
             self._check_player_collision()
             self._resolve_weapon_hits()
+            self._update_and_resolve_projectiles(dt)
 
             # --- Respawn & Stock Loss ---
             for fighter in self.fighters:
@@ -1102,6 +1121,37 @@ class Game:
                     target.receive_knockback(attacker.rect.centerx, weapon.knockback)
                     hit_targets.add(target_key)
 
+    def _spawn_projectiles_from_attacks(self, attacker: Fighter, attacks: list[object]) -> None:
+        for attack in attacks:
+            if isinstance(attack, Projectile):
+                self.projectiles.append((attacker, attack))
+
+    def _update_and_resolve_projectiles(self, dt: float) -> None:
+        remaining: list[tuple[Fighter, Projectile]] = []
+        for owner, projectile in self.projectiles:
+            projectile.update(dt)
+            if not projectile.alive:
+                continue
+
+            hit_tile = any(projectile.rect.colliderect(tile.rect) for tile in self.tiles)
+            if hit_tile:
+                continue
+
+            hit_target = False
+            for target in self.fighters:
+                if target is owner:
+                    continue
+                if projectile.rect.colliderect(target.rect):
+                    target.damage_pct += projectile.damage
+                    target.receive_knockback(owner.rect.centerx, projectile.knockback)
+                    hit_target = True
+                    break
+
+            if not hit_target:
+                remaining.append((owner, projectile))
+
+        self.projectiles = remaining
+
     def _draw(self, dt: float) -> None:
         # Background
         if self.bg_image:
@@ -1117,6 +1167,10 @@ class Game:
         # Fighters
         for fighter in self.fighters:
             fighter.draw(self.screen)
+
+        # Projectiles
+        for _owner, projectile in self.projectiles:
+            pygame.draw.rect(self.screen, ORANGE, projectile.rect, border_radius=2)
 
         # HUD
         self.hud.draw(self.screen)
