@@ -11,13 +11,15 @@ class Sword(Weapon):
     def attack(self, owner_rect, facing_right):
         self.swing_timer = self.swing_duration
 
-        offset = 40 if facing_right else -40
+        hitbox_width = 50
+        hitbox_height = 30
+        offset = owner_rect.width if facing_right else -hitbox_width
 
         self.active_hitbox = pygame.Rect(
             owner_rect.x + offset,
-            owner_rect.y,
-            50,
-            30
+            owner_rect.y + owner_rect.height // 3,
+            hitbox_width,
+            hitbox_height
         )
 
         return [self.active_hitbox]
