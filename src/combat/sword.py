@@ -3,9 +3,9 @@ from .weapon import Weapon
 
 class Sword(Weapon):
     def __init__(self):
-        super().__init__(name="Sword", damage=10, cooldown=20, knockback=100)
-        self.swing_duration = 10   # frames
-        self.swing_timer = 0
+        super().__init__(name="Sword", damage=10, cooldown=0.35, knockback=100)
+        self.swing_duration = 0.12
+        self.swing_timer = 0.0
         self.active_hitbox = None
 
     def attack(self, owner_rect, facing_right):
@@ -26,7 +26,7 @@ class Sword(Weapon):
         super().update(dt)
 
         if self.swing_timer > 0:
-            self.swing_timer -= 1
+            self.swing_timer -= dt
         else:
             self.active_hitbox = None
 
