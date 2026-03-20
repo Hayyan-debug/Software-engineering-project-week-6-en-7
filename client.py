@@ -19,6 +19,7 @@ import threading
 from abc import ABC, abstractmethod
 import asyncio
 
+from src.combat.sword import Sword
 
 # Constants
 
@@ -227,6 +228,7 @@ class Fighter(ABC):
         # Animation state locks
         self.attack_timer = 0.0
         self.attack_duration = 0.4
+        self.weapon = None
 
 
   
@@ -281,6 +283,8 @@ class Fighter(ABC):
     def update(self, dt: float, tiles: list["Tile"]) -> None:
         """Main physics step."""
         self._update_timers(dt)
+        if self.weapon is not None:
+            self.weapon.update(dt)
 
         if self.dashing:
             self._update_dash(dt)
@@ -722,11 +726,16 @@ class SwordFighter(Fighter):
     WEIGHT     = 0.9
     COLOR      = (100, 180, 255)
 
+    def __init__(self, x: float, y: float, player_id: int):
+        super().__init__(x, y, player_id)
+        self.weapon = Sword()
+
     def special_move(self, direction: int) -> None:
-        """Forward lunge — brief burst of horizontal speed."""
-        if not self.dashing:
-            self.vx = direction * 700
-            self.vy = -100
+        """Sword swing attack."""
+        if self.weapon is None:
+            return
+        hitboxes = self.weapon.try_attack(self.rect, self.facing_right)
+        if hitboxes:
             self.anim_state = "attack"
             self.anim_frame = 0
             self.anim_timer = 0.0
@@ -954,6 +963,7 @@ class Game:
         self.input_handler = InputHandler("wasd")
         self.hud           = HUD(self.fighters)
         self.net           = net
+        self._weapon_hit_registry: dict[int, set[int]] = {}
 
         # Background (solid color fallback if no asset)
         self.bg_color = BG_COLOR
@@ -991,6 +1001,7 @@ class Game:
 
             # --- Knockback on player collision ---
             self._check_player_collision()
+            self._resolve_weapon_hits()
 
             # --- Respawn & Stock Loss ---
             for fighter in self.fighters:
@@ -1024,6 +1035,38 @@ class Game:
             push = 4.0
             lf.x += push if overlap_x >= 0 else -push
             rf.x -= push if overlap_x >= 0 else -push
+
+    def _resolve_weapon_hits(self) -> None:
+        """Apply weapon hitbox damage + knockback with one hit per swing."""
+        for attacker in self.fighters:
+            weapon = attacker.weapon
+            if weapon is None:
+                continue
+
+            attacker_key = id(attacker)
+            active_hitboxes = weapon.get_hitboxes()
+            active = len(active_hitboxes) > 0
+
+            # New swing starts when hitboxes become active again.
+            if active and attacker_key not in self._weapon_hit_registry:
+                self._weapon_hit_registry[attacker_key] = set()
+            if not active and attacker_key in self._weapon_hit_registry:
+                del self._weapon_hit_registry[attacker_key]
+                continue
+            if not active:
+                continue
+
+            hit_targets = self._weapon_hit_registry[attacker_key]
+            for target in self.fighters:
+                if target is attacker:
+                    continue
+                target_key = id(target)
+                if target_key in hit_targets:
+                    continue
+                if any(hitbox.colliderect(target.rect) for hitbox in active_hitboxes):
+                    target.damage_pct += weapon.damage
+                    target.receive_knockback(attacker.rect.centerx, weapon.knockback)
+                    hit_targets.add(target_key)
 
     def _draw(self, dt: float) -> None:
         # Background

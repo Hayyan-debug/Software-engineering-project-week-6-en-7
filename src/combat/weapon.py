@@ -40,3 +40,7 @@ class Weapon(ABC):
     @abstractmethod
     def attack(self, owner_rect: pygame.Rect, facing_right: bool) -> list[pygame.Rect]:
         """Perform attack and return newly created hitbox(es)."""
+
+    def get_hitboxes(self) -> list[pygame.Rect]:
+        """Return currently active hitboxes for this weapon."""
+        return []
