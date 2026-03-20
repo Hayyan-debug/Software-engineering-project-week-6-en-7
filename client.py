@@ -731,12 +731,12 @@ class SwordFighter(Fighter):
     def __init__(self, x: float, y: float, player_id: int):
         super().__init__(x, y, player_id)
         self.weapon = Sword()
-        self.sword_sprite_handler = SpritesheetHandler("assets/SwordSpriteSheet3.png", cols=3, rows=3)
+        self.sword_sprite_handler = SpritesheetHandler("assets/SwordSpriteSheet.png", cols=4, rows=3)
         self.sword_idle_frame = 0
         self.sword_attack_frames = [1, 2, 3, 4]
         self.sword_scale = 0.22
-        self.sword_hand_offset_right = (0, 0)
-        self.sword_hand_offset_left = (14, 14)
+        self.sword_hand_offset_right = (20, 10)
+        self.sword_hand_offset_left = (20, 10)
 
     def special_move(self, direction: int) -> None:
         """Sword swing attack."""
