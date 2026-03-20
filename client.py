@@ -256,7 +256,7 @@ class Fighter(ABC):
         
         # Animation data
         anims = {
-            "idle": [0, 1],
+            "idle": [0],
             "run":  [2, 3, 4, 5],
             "jump": [6, 7],
             "fall": [8, 9],
@@ -319,10 +319,12 @@ class Fighter(ABC):
         elif self.dashing:
             self.anim_state = "dash"
         elif not self.on_ground:
-            if self.vy < 0:
+            if self.vy < -5:
                 self.anim_state = "jump"
-            else:
+            elif self.vy > 5:
                 self.anim_state = "fall"
+            else:
+                self.anim_state = "idle"
         elif abs(self.vx) > 10:
             self.anim_state = "run"
         else:
@@ -338,7 +340,7 @@ class Fighter(ABC):
         
         # Frame indices mapping (based on sheets)
         anims = {
-            "idle": [0, 1],
+            "idle": [0],
             "run":  [2, 3, 4, 5],
             "jump": [6, 7],
             "fall": [8, 9],
@@ -421,6 +423,20 @@ class Fighter(ABC):
                     self.vy    = 0
                     self.kb_vy = 0
                 self.y = float(self.rect.y)
+
+        # Snap to ground when exactly touching tile top (colliderect misses edge-touch)
+        if not self.on_ground and total_vy >= 0:
+            for tile in tiles:
+                x_overlap = self.rect.right > tile.rect.left and self.rect.left < tile.rect.right
+                touching_top = abs(self.rect.bottom - tile.rect.top) <= 1
+                if x_overlap and touching_top:
+                    self.on_ground = True
+                    self.vy = 0
+                    self.kb_vy = 0
+                    self.rect.bottom = tile.rect.top
+                    self.y = float(self.rect.y)
+                    self.jumps_left = 2
+                    break
 
         # Reset coyote timer when freshly landing
         if self.on_ground and not was_on_ground:
