@@ -23,6 +23,7 @@ from src.combat.bow import Bow
 from src.combat.hammer import Hammer
 from src.combat.projectile import Projectile
 from src.combat.sword import Sword
+from src.effects.effects import HitEffect, create_hit_effect, draw_hit_effects, update_hit_effects
 
 # Constants
 
@@ -1104,6 +1105,7 @@ class Game:
         self.net           = net
         self._weapon_hit_registry: dict[int, set[int]] = {}
         self.projectiles: list[tuple[Fighter, Projectile]] = []
+        self.hit_effects: list[HitEffect] = []
 
         # Background (solid color fallback if no asset)
         self.bg_color = BG_COLOR
@@ -1145,6 +1147,7 @@ class Game:
             self._check_player_collision()
             self._resolve_weapon_hits()
             self._update_and_resolve_projectiles(dt)
+            self.hit_effects = update_hit_effects(self.hit_effects, dt)
 
             # --- Respawn & Stock Loss ---
             for fighter in self.fighters:
@@ -1209,6 +1212,7 @@ class Game:
                 if any(hitbox.colliderect(target.rect) for hitbox in active_hitboxes):
                     target.damage_pct += weapon.damage
                     target.receive_knockback(attacker.rect.centerx, weapon.knockback)
+                    self.hit_effects.append(create_hit_effect(*target.rect.center))
                     hit_targets.add(target_key)
 
     def _spawn_projectiles_from_attacks(self, attacker: Fighter, attacks: list[object]) -> None:
@@ -1234,6 +1238,7 @@ class Game:
                 if projectile.rect.colliderect(target.rect):
                     target.damage_pct += projectile.damage
                     target.receive_knockback(owner.rect.centerx, projectile.knockback)
+                    self.hit_effects.append(create_hit_effect(*target.rect.center))
                     hit_target = True
                     break
 
@@ -1261,6 +1266,9 @@ class Game:
         # Projectiles
         for _owner, projectile in self.projectiles:
             pygame.draw.rect(self.screen, ORANGE, projectile.rect, border_radius=2)
+
+        # Hit effects
+        draw_hit_effects(self.screen, self.hit_effects)
 
         # HUD
         self.hud.draw(self.screen)
