@@ -24,6 +24,7 @@ from src.combat.hammer import Hammer
 from src.combat.projectile import Projectile
 from src.combat.sword import Sword
 from src.effects.effects import HitEffect, create_hit_effect, draw_hit_effects, update_hit_effects
+from src.effects.hitstop import HitStopState, is_hit_stopped, trigger_hit_stop, update_hit_stop
 
 # Constants
 
@@ -1106,6 +1107,7 @@ class Game:
         self._weapon_hit_registry: dict[int, set[int]] = {}
         self.projectiles: list[tuple[Fighter, Projectile]] = []
         self.hit_effects: list[HitEffect] = []
+        self.hit_stop = HitStopState()
 
         # Background (solid color fallback if no asset)
         self.bg_color = BG_COLOR
@@ -1133,30 +1135,33 @@ class Game:
                 events.append(event)
 
             keys = pygame.key.get_pressed()
+            self.hit_stop = update_hit_stop(self.hit_stop, dt)
+            stopped = is_hit_stopped(self.hit_stop)
 
             # --- Input ---
-            self.input_handler.process(self.local_fighter, keys, events)
-            for fighter in self.fighters:
-                self._spawn_projectiles_from_attacks(fighter, fighter.consume_pending_attacks())
+            if not stopped:
+                self.input_handler.process(self.local_fighter, keys, events)
+                for fighter in self.fighters:
+                    self._spawn_projectiles_from_attacks(fighter, fighter.consume_pending_attacks())
 
-            # --- Physics update ---
-            for fighter in self.fighters:
-                fighter.update(dt, self.tiles)
+                # --- Physics update ---
+                for fighter in self.fighters:
+                    fighter.update(dt, self.tiles)
 
-            # --- Knockback on player collision ---
-            self._check_player_collision()
-            self._resolve_weapon_hits()
-            self._update_and_resolve_projectiles(dt)
-            self.hit_effects = update_hit_effects(self.hit_effects, dt)
+                # --- Knockback on player collision ---
+                self._check_player_collision()
+                self._resolve_weapon_hits()
+                self._update_and_resolve_projectiles(dt)
+                self.hit_effects = update_hit_effects(self.hit_effects, dt)
 
-            # --- Respawn & Stock Loss ---
-            for fighter in self.fighters:
-                if fighter.is_dead:
-                    self.hud.lose_stock(fighter.player_id)
-                    fighter.respawn(640, 200)
+                # --- Respawn & Stock Loss ---
+                for fighter in self.fighters:
+                    if fighter.is_dead:
+                        self.hud.lose_stock(fighter.player_id)
+                        fighter.respawn(640, 200)
 
-            # --- Update HUD timer ---
-            self.hud.update(dt)
+                # --- Update HUD timer ---
+                self.hud.update(dt)
 
             # --- Networking ---
             if self.net and self.net.connected:
@@ -1213,6 +1218,7 @@ class Game:
                     target.damage_pct += weapon.damage
                     target.receive_knockback(attacker.rect.centerx, weapon.knockback)
                     self.hit_effects.append(create_hit_effect(*target.rect.center))
+                    trigger_hit_stop(self.hit_stop, weapon.name)
                     hit_targets.add(target_key)
 
     def _spawn_projectiles_from_attacks(self, attacker: Fighter, attacks: list[object]) -> None:
@@ -1239,6 +1245,8 @@ class Game:
                     target.damage_pct += projectile.damage
                     target.receive_knockback(owner.rect.centerx, projectile.knockback)
                     self.hit_effects.append(create_hit_effect(*target.rect.center))
+                    owner_weapon_name = owner.weapon.name if owner.weapon is not None else "Bow"
+                    trigger_hit_stop(self.hit_stop, owner_weapon_name)
                     hit_target = True
                     break
 
