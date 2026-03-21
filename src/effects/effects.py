@@ -48,7 +48,7 @@ def update_hit_effects(effects: list[HitEffect], dt: float) -> list[HitEffect]:
     return alive
 
 
-def draw_hit_effects(surface: pygame.Surface, effects: list[HitEffect]) -> None:
+def draw_hit_effects(surface: pygame.Surface, effects: list[HitEffect], cam_x: int = 0, cam_y: int = 0) -> None:
     for effect in effects:
         duration = max(effect.duration, 0.001)
         progress = min(1.0, effect.age / duration)
@@ -74,7 +74,10 @@ def draw_hit_effects(surface: pygame.Surface, effects: list[HitEffect]) -> None:
         )
         pygame.draw.circle(ring_surface, (*effect.palette.flash, int(alpha * 0.65)), ring_center, flash_radius)
 
-        surface.blit(ring_surface, (int(effect.x) - ring_center[0], int(effect.y) - ring_center[1]))
+        surface.blit(
+            ring_surface,
+            (int(effect.x) - cam_x - ring_center[0], int(effect.y) - cam_y - ring_center[1]),
+        )
 
 
 def _lerp_color(a: Color, b: Color, t: float) -> Color:

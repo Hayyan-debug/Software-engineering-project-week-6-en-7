@@ -25,6 +25,7 @@ from src.combat.projectile import Projectile
 from src.combat.sword import Sword
 from src.effects.effects import HitEffect, create_hit_effect, draw_hit_effects, update_hit_effects
 from src.effects.hitstop import HitStopState, is_hit_stopped, trigger_hit_stop, update_hit_stop
+from src.effects.screenshake import ScreenShakeState, get_screen_shake_offset, trigger_screen_shake, update_screen_shake
 
 # Constants
 
@@ -1108,6 +1109,7 @@ class Game:
         self.projectiles: list[tuple[Fighter, Projectile]] = []
         self.hit_effects: list[HitEffect] = []
         self.hit_stop = HitStopState()
+        self.screen_shake = ScreenShakeState()
 
         # Background (solid color fallback if no asset)
         self.bg_color = BG_COLOR
@@ -1136,6 +1138,7 @@ class Game:
 
             keys = pygame.key.get_pressed()
             self.hit_stop = update_hit_stop(self.hit_stop, dt)
+            self.screen_shake = update_screen_shake(self.screen_shake, dt)
             stopped = is_hit_stopped(self.hit_stop)
 
             # --- Input ---
@@ -1219,6 +1222,7 @@ class Game:
                     target.receive_knockback(attacker.rect.centerx, weapon.knockback)
                     self.hit_effects.append(create_hit_effect(*target.rect.center))
                     trigger_hit_stop(self.hit_stop, weapon.name)
+                    trigger_screen_shake(self.screen_shake, weapon.name)
                     hit_targets.add(target_key)
 
     def _spawn_projectiles_from_attacks(self, attacker: Fighter, attacks: list[object]) -> None:
@@ -1247,6 +1251,7 @@ class Game:
                     self.hit_effects.append(create_hit_effect(*target.rect.center))
                     owner_weapon_name = owner.weapon.name if owner.weapon is not None else "Bow"
                     trigger_hit_stop(self.hit_stop, owner_weapon_name)
+                    trigger_screen_shake(self.screen_shake, owner_weapon_name)
                     hit_target = True
                     break
 
@@ -1256,12 +1261,16 @@ class Game:
         self.projectiles = remaining
 
     def _draw(self, dt: float) -> None:
+        shake_x, shake_y = get_screen_shake_offset(self.screen_shake)
+        world_cam_x = -shake_x
+        world_cam_y = -shake_y
+
         # Background
         if self.bg_image:
-            self.screen.blit(self.bg_image, (0, 0))
+            self.screen.blit(self.bg_image, (shake_x, shake_y))
         else:
             self.screen.fill(self.bg_color)
-            self._draw_stars()
+            self._draw_stars(world_cam_x, world_cam_y)
 
         # Tiles (invisible collision tiles for map art)
         # for tile in self.tiles:
@@ -1269,26 +1278,27 @@ class Game:
 
         # Fighters
         for fighter in self.fighters:
-            fighter.draw(self.screen)
+            fighter.draw(self.screen, world_cam_x, world_cam_y)
 
         # Projectiles
         for _owner, projectile in self.projectiles:
-            pygame.draw.rect(self.screen, ORANGE, projectile.rect, border_radius=2)
+            world_projectile = projectile.rect.move(shake_x, shake_y)
+            pygame.draw.rect(self.screen, ORANGE, world_projectile, border_radius=2)
 
         # Hit effects
-        draw_hit_effects(self.screen, self.hit_effects)
+        draw_hit_effects(self.screen, self.hit_effects, world_cam_x, world_cam_y)
 
         # HUD
         self.hud.draw(self.screen)
 
         pygame.display.flip()
 
-    def _draw_stars(self) -> None:
+    def _draw_stars(self, cam_x: int = 0, cam_y: int = 0) -> None:
         for sx, sy, brightness in self.stars:
             radius = 1 if brightness < 0.5 else 2
             alpha  = int(brightness * 200)
             color  = (alpha, alpha, alpha)
-            pygame.draw.circle(self.screen, color, (sx, sy), radius)
+            pygame.draw.circle(self.screen, color, (sx - cam_x, sy - cam_y), radius)
 
 
 
