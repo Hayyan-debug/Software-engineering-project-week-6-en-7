@@ -886,6 +886,12 @@ class HammerFighter(Fighter):
     def __init__(self, x: float, y: float, player_id: int):
         super().__init__(x, y, player_id)
         self.weapon = Hammer()
+        self.hammer_sprite_handler = SpritesheetHandler("assets/hammer_spritesheet.png", cols=4, rows=3)
+        self.hammer_idle_frame = 0
+        self.hammer_attack_frames = [1, 2, 3, 4, 5, 6, 7]
+        self.hammer_scale = 0.26
+        self.hammer_hand_offset_right = (19, 9)
+        self.hammer_hand_offset_left = (18, 8)
 
     def special_move(self, direction: int) -> None:
         """Heavy hammer slam with wind-up then impact."""
@@ -904,11 +910,38 @@ class HammerFighter(Fighter):
 
     def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         super().draw_character(surface, cam_x, cam_y)
+        self._draw_hammer(surface, cam_x, cam_y)
+
+    def _draw_hammer(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        if self.attack_timer > 0 and self.hammer_attack_frames:
+            attack_progress = 1.0 - (self.attack_timer / max(self.attack_duration, 0.001))
+            attack_progress = max(0.0, min(attack_progress, 0.999))
+            frame_slot = int(attack_progress * len(self.hammer_attack_frames))
+            frame_idx = self.hammer_attack_frames[frame_slot]
+        else:
+            frame_idx = self.hammer_idle_frame
+
+        hammer = self.hammer_sprite_handler.get_frame(frame_idx)
+        hw = max(1, int(self.hammer_sprite_handler.frame_w * self.hammer_scale))
+        hh = max(1, int(self.hammer_sprite_handler.frame_h * self.hammer_scale))
+        hammer = pygame.transform.scale(hammer, (hw, hh))
+
+        if not self.facing_right:
+            hammer = pygame.transform.flip(hammer, True, False)
+
         rx = int(self.x) - cam_x
         ry = int(self.y) - cam_y
-        if self.anim_state == "attack":
-            hx = rx + (self.width if self.facing_right else -20)
-            pygame.draw.rect(surface, (180, 60, 60), (hx, ry, 20, 26), border_radius=4)
+        if self.facing_right:
+            hand_x = rx + self.hammer_hand_offset_right[0]
+            hand_y = ry + self.hammer_hand_offset_right[1]
+            draw_x = hand_x
+        else:
+            hand_x = rx + self.hammer_hand_offset_left[0]
+            hand_y = ry + self.hammer_hand_offset_left[1]
+            draw_x = hand_x - hw
+
+        draw_y = hand_y - int(hh * 0.45)
+        surface.blit(hammer, (draw_x, draw_y))
 
 
 # Arena tile
