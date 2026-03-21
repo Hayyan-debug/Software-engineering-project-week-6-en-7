@@ -19,6 +19,7 @@ import threading
 from abc import ABC, abstractmethod
 import asyncio
 
+from src.audio import AudioManager, get_shared_audio_manager
 from src.combat.bow import Bow
 from src.combat.hammer import Hammer
 from src.combat.projectile import Projectile
@@ -1030,9 +1031,10 @@ class InputHandler:
         },
     }
 
-    def __init__(self, scheme: str = "wasd"):
+    def __init__(self, scheme: str = "wasd", audio_manager: AudioManager | None = None):
         self.keys = self.SCHEMES[scheme]
         self._prev_keys: set = set()
+        self.audio_manager = audio_manager
 
     def process(self, fighter: Fighter, keys_down, events: list) -> None:
         """Apply keyboard state to the fighter this frame."""
@@ -1057,6 +1059,8 @@ class InputHandler:
                     fighter.dash(direction if direction != 0 else
                                  (1 if fighter.facing_right else -1))
                 if event.key == self.keys["special"]:
+                    if self.audio_manager is not None:
+                        self.audio_manager.play_sfx("special")
                     fighter.special_move(1 if fighter.facing_right else -1)
 
         # Consume buffered jump on landing
@@ -1077,7 +1081,8 @@ class Game:
     def __init__(self, arena_id: int = 0,
                  fighter_cls_local=SwordFighter,
                  fighter_cls_remote=HammerFighter,
-                 net: NetworkClient | None = None):
+                 net: NetworkClient | None = None,
+                 audio_manager: AudioManager | None = None):
 
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("Gauntlet Galaxy")
@@ -1102,7 +1107,8 @@ class Game:
         self.remote_fighter = fighter_cls_remote(900, 400, player_id=1)
         self.fighters = [self.local_fighter, self.remote_fighter]
 
-        self.input_handler = InputHandler("wasd")
+        self.audio_manager = audio_manager
+        self.input_handler = InputHandler("wasd", audio_manager=self.audio_manager)
         self.hud           = HUD(self.fighters)
         self.net           = net
         self._weapon_hit_registry: dict[int, set[int]] = {}
@@ -1121,6 +1127,9 @@ class Game:
 
     async def run(self) -> None:
         """Main loop."""
+        if self.audio_manager is not None:
+            self.audio_manager.play_music("main_theme")
+
         running = True
         while running:
             # Yield control for pygbag/browser
@@ -1223,6 +1232,9 @@ class Game:
                     self.hit_effects.append(create_hit_effect(*target.rect.center))
                     trigger_hit_stop(self.hit_stop, weapon.name)
                     trigger_screen_shake(self.screen_shake, weapon.name)
+                    if self.audio_manager is not None:
+                        if not self.audio_manager.play_sfx(f"hit_{weapon.name.lower()}"):
+                            self.audio_manager.play_sfx("hit")
                     hit_targets.add(target_key)
 
     def _spawn_projectiles_from_attacks(self, attacker: Fighter, attacks: list[object]) -> None:
@@ -1252,6 +1264,9 @@ class Game:
                     owner_weapon_name = owner.weapon.name if owner.weapon is not None else "Bow"
                     trigger_hit_stop(self.hit_stop, owner_weapon_name)
                     trigger_screen_shake(self.screen_shake, owner_weapon_name)
+                    if self.audio_manager is not None:
+                        if not self.audio_manager.play_sfx(f"hit_{owner_weapon_name.lower()}"):
+                            self.audio_manager.play_sfx("hit")
                     hit_target = True
                     break
 
@@ -1307,6 +1322,9 @@ class Game:
 
 def main() -> None:
     pygame.init()
+    audio_manager = get_shared_audio_manager()
+    audio_manager.initialize()
+    audio_manager.preload()
 
     # Attempt to connect to server (optional — game runs offline too)
     net = NetworkClient(host="localhost", port=12345)
@@ -1325,6 +1343,7 @@ def main() -> None:
         fighter_cls_local=fighter_cls_local,
         fighter_cls_remote=fighter_cls_remote,
         net=net,
+        audio_manager=audio_manager,
     )
     game.run()
 

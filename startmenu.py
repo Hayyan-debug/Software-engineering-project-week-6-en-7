@@ -16,6 +16,8 @@ import math
 import os
 import asyncio
 
+from src.audio import get_shared_audio_manager
+
 # Initialize Pygame
 pygame.init()
 
@@ -46,6 +48,14 @@ CONFIRM_GREEN_BORDER = (20, 150, 60)
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Gauntlet Galaxy")
 clock = pygame.time.Clock()
+
+audio_manager = get_shared_audio_manager()
+audio_manager.initialize()
+audio_manager.preload()
+
+
+def play_ui_sfx(name: str) -> None:
+    audio_manager.play_sfx(name)
 
 
 # ── Asset loading ──────────────────────────────────────────────────────────
@@ -785,11 +795,14 @@ async def screen_start_menu():
                     buttons[selected].selected = False
                     selected = (selected - 1) % len(buttons)
                     buttons[selected].selected = True
+                    play_ui_sfx("ui_move")
                 elif event.key in (pygame.K_RIGHT, pygame.K_d):
                     buttons[selected].selected = False
                     selected = (selected + 1) % len(buttons)
                     buttons[selected].selected = True
+                    play_ui_sfx("ui_move")
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    play_ui_sfx("ui_confirm")
                     if selected == 0:
                         result[0] = "START_GAME"
                         transition.start(lambda: None)
@@ -888,6 +901,7 @@ async def screen_matchmaking():
                 return "QUIT"
             elif event.type == pygame.KEYDOWN and not transition.active:
                 if teammate_found and event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    play_ui_sfx("ui_confirm")
                     done[0] = True
                     transition.start(lambda: None)
 
@@ -1013,22 +1027,28 @@ async def screen_battle_lobby():
                     if event.key in (pygame.K_LEFT, pygame.K_a):
                         p1_weapon_idx = (p1_weapon_idx - 1) % 3
                         p1_display.select_weapon(p1_weapon_idx)
+                        play_ui_sfx("ui_move")
                     elif event.key in (pygame.K_RIGHT, pygame.K_d):
                         p1_weapon_idx = (p1_weapon_idx + 1) % 3
                         p1_display.select_weapon(p1_weapon_idx)
+                        play_ui_sfx("ui_move")
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         p1_display.confirmed = True
+                        play_ui_sfx("ui_confirm")
                         focus = "p2_weapon"
 
                 elif focus == "p2_weapon":
                     if event.key in (pygame.K_LEFT, pygame.K_a):
                         p2_weapon_idx = (p2_weapon_idx - 1) % 3
                         p2_display.select_weapon(p2_weapon_idx)
+                        play_ui_sfx("ui_move")
                     elif event.key in (pygame.K_RIGHT, pygame.K_d):
                         p2_weapon_idx = (p2_weapon_idx + 1) % 3
                         p2_display.select_weapon(p2_weapon_idx)
+                        play_ui_sfx("ui_move")
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         p2_display.confirmed = True
+                        play_ui_sfx("ui_confirm")
                         focus = "arena"
 
                 elif focus == "arena":
@@ -1036,22 +1056,27 @@ async def screen_battle_lobby():
                         arenas[arena_idx].selected = False
                         arena_idx = (arena_idx - 1) % len(arenas)
                         arenas[arena_idx].selected = True
+                        play_ui_sfx("ui_move")
                     elif event.key in (pygame.K_RIGHT, pygame.K_d):
                         arenas[arena_idx].selected = False
                         arena_idx = (arena_idx + 1) % len(arenas)
                         arenas[arena_idx].selected = True
+                        play_ui_sfx("ui_move")
                     elif event.key in (pygame.K_UP, pygame.K_w):
                         arenas[arena_idx].selected = False
                         arena_idx = (arena_idx - 2) % len(arenas)
                         arenas[arena_idx].selected = True
+                        play_ui_sfx("ui_move")
                     elif event.key in (pygame.K_DOWN, pygame.K_s):
                         arenas[arena_idx].selected = False
                         arena_idx = (arena_idx + 2) % len(arenas)
                         arenas[arena_idx].selected = True
+                        play_ui_sfx("ui_move")
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         # Vote for this arena
                         arenas[arena_idx].votes += 1
                         vote_count += 1
+                        play_ui_sfx("ui_confirm")
                         focus = "confirm"
                         confirm_ready = True
 
@@ -1067,10 +1092,12 @@ async def screen_battle_lobby():
                             "arena_id": arenas[arena_idx].arena_id,
                             "arena_name": arenas[arena_idx].name,
                         }
+                        play_ui_sfx("ui_confirm")
                         transition.start(lambda: None)
 
                 # Back button (B/Escape)
                 if event.key == pygame.K_ESCAPE:
+                    play_ui_sfx("ui_back")
                     if focus == "p2_weapon":
                         p1_display.confirmed = False
                         focus = "p1_weapon"
@@ -1166,6 +1193,7 @@ async def screen_battle_lobby():
 
 async def main_menu():
     """Complete game flow: Start Menu → Matchmaking → Lobby → Game."""
+    audio_manager.play_music("menu_theme_1")
 
     # STEP 1: Start Menu
     action = await screen_start_menu()
@@ -1222,6 +1250,7 @@ async def main_menu():
             fighter_cls_local=fighter_classes[selections["p1_weapon"]],
             fighter_cls_remote=fighter_classes[selections["p2_weapon"]],
             net=net,
+            audio_manager=audio_manager,
         )
 
         # Configure the HUD arena name from lobby selection
