@@ -980,7 +980,7 @@ async def screen_battle_lobby():
     # Selection state
     focus = "p1_weapon"  # p1_weapon → p2_weapon → arena → confirm
     p1_weapon_idx = 0
-    p2_weapon_idx = 1
+    p2_weapon_idx = 0
     arena_idx = 0
     arenas[0].selected = True
     arenas[0].votes = 1
