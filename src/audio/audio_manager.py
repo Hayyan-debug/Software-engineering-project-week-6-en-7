@@ -60,7 +60,9 @@ class AudioManager:
 
         self._music_tracks = self._discover_files(self.music_dir, self.music_extensions)
 
-        for key, path in self._discover_files(self.sfx_dir, self.sfx_extensions).items():
+        for key, path in self._discover_files(
+            self.sfx_dir, self.sfx_extensions, recursive=True
+        ).items():
             try:
                 sound = pygame.mixer.Sound(str(path))
                 sound.set_volume(self._sfx_volume)
@@ -158,12 +160,15 @@ class AudioManager:
     def _clamp(value: float) -> float:
         return max(0.0, min(1.0, float(value)))
 
-    def _discover_files(self, root: Path, extensions: tuple[str, ...]) -> dict[str, Path]:
+    def _discover_files(
+        self, root: Path, extensions: tuple[str, ...], recursive: bool = False
+    ) -> dict[str, Path]:
         files: dict[str, Path] = {}
         if not root.exists():
             return files
 
-        for path in sorted(root.iterdir()):
+        paths = root.rglob("*") if recursive else root.iterdir()
+        for path in sorted(paths):
             if not path.is_file():
                 continue
             if path.suffix.lower() not in extensions:

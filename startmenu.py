@@ -862,7 +862,10 @@ async def screen_credits():
         dt = clock.tick(FPS) / 1000.0
         pulse_timer += dt
         for event in pygame.event.get():
-            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                play_ui_sfx("ui_exit")
                 running = False
         
         # Simple draw
