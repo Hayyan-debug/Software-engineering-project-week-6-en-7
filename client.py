@@ -20,6 +20,7 @@ from abc import ABC, abstractmethod
 import asyncio
 
 from src.combat.bow import Bow
+from src.combat.hammer import Hammer
 from src.combat.projectile import Projectile
 from src.combat.sword import Sword
 
@@ -882,14 +883,23 @@ class HammerFighter(Fighter):
     WEIGHT     = 1.4
     COLOR      = (220, 100, 100)
 
+    def __init__(self, x: float, y: float, player_id: int):
+        super().__init__(x, y, player_id)
+        self.weapon = Hammer()
+
     def special_move(self, direction: int) -> None:
-        """Ground slam — dive straight down."""
-        if not self.on_ground:
-            self.vy = DASH_SPEED
-            self.kb_vy = 0
-            self.anim_state = "attack"
-            self.anim_frame = 0
-            self.attack_timer = self.attack_duration
+        """Heavy hammer slam with wind-up then impact."""
+        if self.weapon is None:
+            return
+        if not self.weapon.can_attack():
+            return
+        if isinstance(self.weapon, Hammer):
+            self.weapon.set_attack_context(self.on_ground)
+        self.weapon.try_attack(self.rect, self.facing_right)
+        self.anim_state = "attack"
+        self.anim_frame = 0
+        self.anim_timer = 0.0
+        self.attack_timer = self.attack_duration
 
 
     def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
