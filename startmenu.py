@@ -15,8 +15,12 @@ import sys
 import math
 import os
 import asyncio
+import socket
+import time
 
 from src.audio import get_shared_audio_manager
+import server
+from client import NetworkClient
 
 # Initialize Pygame
 pygame.init()
@@ -38,6 +42,7 @@ YELLOW = (255, 230, 100)
 RED = (220, 60, 60)
 GREEN = (80, 200, 80)
 CYAN = (0, 220, 255)
+PURPLE = (180, 80, 255)
 BG_COLOR = (20, 20, 35)
 PANEL_BG = (10, 15, 30, 200)
 SELECTED_GLOW = (0, 180, 255)
@@ -111,6 +116,25 @@ except Exception as e:
     print(f"Could not load spritesheets in startmenu: {e}")
     luna_portrait = None
     raven_portrait = None
+
+# Weapon icons
+weapon_icons = {}
+try:
+    sword_sheet = pygame.image.load(os.path.join("assets", "SwordSpriteSheet.png")).convert_alpha()
+    bow_sheet = pygame.image.load(os.path.join("assets", "BowSpriteSheet.png")).convert_alpha()
+    hammer_sheet = pygame.image.load(os.path.join("assets", "hammer_spritesheet.png")).convert_alpha()
+    
+    # Each is 4x3 (12 frames)
+    def extract_icon(sheet, cols=4, rows=3):
+        fw = sheet.get_width() // cols
+        fh = sheet.get_height() // rows
+        return sheet.subsurface(pygame.Rect(0, 0, fw, fh))
+
+    weapon_icons["sword"] = pygame.transform.scale(extract_icon(sword_sheet), (80, 80))
+    weapon_icons["bow"] = pygame.transform.scale(extract_icon(bow_sheet), (80, 80))
+    weapon_icons["hammer"] = pygame.transform.scale(extract_icon(hammer_sheet), (80, 80))
+except Exception as e:
+    print(f"Could not load weapon icons: {e}")
 
 
 # Fonts
@@ -194,13 +218,39 @@ def draw_outlined_text(surface, text, font, color, x, y, outline_color=BLACK, ou
         r = text_surf.get_rect(midleft=(x, y))
     surface.blit(text_surf, r)
 
-
-def draw_panel(surface, rect, alpha=200, border_color=LIGHT_BLUE, border_width=2):
-    """Draw a semi-transparent dark panel with a glowing border."""
+def draw_panel(surface, rect, color=BLACK, alpha=200, border_color=GRAY, border_w=3, radius=10):
     s = pygame.Surface((rect[2], rect[3]), pygame.SRCALPHA)
-    s.fill((10, 15, 30, alpha))
+    pygame.draw.rect(s, (*color, alpha), s.get_rect(), border_radius=radius)
+    if border_w > 0:
+        pygame.draw.rect(s, border_color, s.get_rect(), width=border_w, border_radius=radius)
     surface.blit(s, (rect[0], rect[1]))
-    pygame.draw.rect(surface, border_color, rect, border_width, border_radius=4)
+
+async def find_lan_host(room_key: str, port=5556, timeout=1.5) -> str | None:
+    """Listens for a LAN UDP broadcast from a host for `timeout` seconds."""
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    udp.setblocking(False)
+    try:
+        udp.bind(('', port))
+    except Exception:
+        pass  # If we can't bind (e.g. port in use), we'll try listening anyway
+    
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            data, addr = udp.recvfrom(1024)
+            if data and data.decode() == f"GAUNTLET_GALAXY|{room_key}":
+                return addr[0]
+        except BlockingIOError:
+            pass  # No data yet
+        except OSError:
+            break
+        await asyncio.sleep(0.05)
+    return None
+
+# ============================================================================
+# MATCHMAKING SCREEN (Find opponent)
+# ============================================================================
 
 
 def draw_glow_rect(surface, rect, color, intensity=30):
@@ -366,32 +416,42 @@ class WeaponCard:
         s.fill((15, 20, 35, bg_alpha))
         surface.blit(s, self.rect.topleft)
 
-        # Draw weapon icon (stylized shape)
+        # Draw weapon icon
         icon_cx = self.rect.centerx
-        icon_cy = self.rect.y + 55
+        icon_cy = self.rect.y + 50
         wtype = self.info["type"]
         wcolor = self.info["color"]
 
-        if wtype == "sword":
-            # Sword shape
-            pygame.draw.rect(surface, wcolor, (icon_cx - 4, icon_cy - 30, 8, 50), border_radius=2)
-            pygame.draw.rect(surface, YELLOW, (icon_cx - 16, icon_cy + 12, 32, 6), border_radius=2)
-            pygame.draw.polygon(surface, (200, 220, 255),
-                                [(icon_cx, icon_cy - 35), (icon_cx - 6, icon_cy - 25), (icon_cx + 6, icon_cy - 25)])
-        elif wtype == "bow":
-            # Bow shape
-            pygame.draw.arc(surface, wcolor,
-                            (icon_cx - 20, icon_cy - 30, 25, 60),
-                            math.pi * 0.25, math.pi * 0.75, 4)
-            pygame.draw.line(surface, wcolor, (icon_cx - 8, icon_cy - 25), (icon_cx - 8, icon_cy + 25), 2)
-            # Arrow
-            pygame.draw.line(surface, ORANGE, (icon_cx - 5, icon_cy), (icon_cx + 25, icon_cy), 3)
-            pygame.draw.polygon(surface, ORANGE,
-                                [(icon_cx + 25, icon_cy), (icon_cx + 18, icon_cy - 5), (icon_cx + 18, icon_cy + 5)])
-        elif wtype == "hammer":
-            # Hammer shape
-            pygame.draw.rect(surface, (140, 100, 70), (icon_cx - 3, icon_cy - 10, 6, 40), border_radius=2)
-            pygame.draw.rect(surface, wcolor, (icon_cx - 18, icon_cy - 25, 36, 20), border_radius=4)
+        icon_img = weapon_icons.get(wtype)
+        if icon_img:
+            # Apply a slight scale when selected or hovered
+            scale_mod = 1.0
+            if self.selected:
+                scale_mod = 1.15 + math.sin(time * 6) * 0.05
+            elif self.hover:
+                scale_mod = 1.08
+
+            target_w = int(icon_img.get_width() * scale_mod)
+            target_h = int(icon_img.get_height() * scale_mod)
+            img = pygame.transform.scale(icon_img, (target_w, target_h))
+            surface.blit(img, img.get_rect(center=(icon_cx, icon_cy)))
+        else:
+            # Fallback stylized shapes (Old temporary solution)
+            if wtype == "sword":
+                pygame.draw.rect(surface, wcolor, (icon_cx - 4, icon_cy - 30, 8, 50), border_radius=2)
+                pygame.draw.rect(surface, YELLOW, (icon_cx - 16, icon_cy + 12, 32, 6), border_radius=2)
+                pygame.draw.polygon(surface, (200, 220, 255),
+                                    [(icon_cx, icon_cy - 35), (icon_cx - 6, icon_cy - 25), (icon_cx + 6, icon_cy - 25)])
+            elif wtype == "bow":
+                pygame.draw.arc(surface, wcolor, (icon_cx - 20, icon_cy - 30, 25, 60), 
+                                math.pi * 0.25, math.pi * 0.75, 4)
+                pygame.draw.line(surface, wcolor, (icon_cx - 8, icon_cy - 25), (icon_cx - 8, icon_cy + 25), 2)
+                pygame.draw.line(surface, ORANGE, (icon_cx - 5, icon_cy), (icon_cx + 25, icon_cy), 3)
+                pygame.draw.polygon(surface, ORANGE,
+                                    [(icon_cx + 25, icon_cy), (icon_cx + 18, icon_cy - 5), (icon_cx + 18, icon_cy + 5)])
+            elif wtype == "hammer":
+                pygame.draw.rect(surface, (140, 100, 70), (icon_cx - 3, icon_cy - 10, 6, 40), border_radius=2)
+                pygame.draw.rect(surface, wcolor, (icon_cx - 18, icon_cy - 25, 36, 20), border_radius=4)
 
         # Border
         pygame.draw.rect(surface, border_color, self.rect, border_w, border_radius=6)
@@ -424,6 +484,7 @@ class ArenaCard:
         self.rect = pygame.Rect(x, y, width, height)
         self.votes = 0
         self.selected = False
+        self.opp_selected = False
         self.hover = False
         
         # Load map preview image
@@ -440,10 +501,18 @@ class ArenaCard:
             self.image = None
 
     def draw(self, surface, time):
-        if self.selected:
+        if self.selected and getattr(self, "opp_selected", False):
+            border_color = PURPLE
+            border_w = 4
+            draw_glow_rect(surface, (self.rect.x, self.rect.y, self.rect.w, self.rect.h), PURPLE, 25)
+        elif self.selected:
             border_color = CYAN
             border_w = 4
             draw_glow_rect(surface, (self.rect.x, self.rect.y, self.rect.w, self.rect.h), CYAN, 25)
+        elif getattr(self, "opp_selected", False):
+            border_color = RED
+            border_w = 4
+            draw_glow_rect(surface, (self.rect.x, self.rect.y, self.rect.w, self.rect.h), RED, 25)
         elif self.hover:
             border_color = LIGHT_BLUE
             border_w = 3
@@ -880,45 +949,198 @@ async def screen_credits():
 # ── Screen: Matchmaking ────────────────────────────────────────────────────
 
 async def screen_matchmaking():
-    """Matchmaking / looking-for-teammate screen. Returns when teammate found."""
+    """Matchmaking screen — connects to server and waits for opponent."""
+    from client import NetworkClient
+    import random
+    import string
+
     state_timer = 0
     pulse_timer = 0
     teammate_found = False
     transition = ScreenTransition()
     done = [False]
 
+    # Networking
+    net = None
+    connection_status = ""
+    is_joiner = False
+    input_text = ""
+    connect_failed = False
+    reveal_timer = 0.0
+
+    state = "menu"  # menu, create_wait, join_input, join_wait
+
+    menu_buttons = [
+        MenuButton("CREATE ROOM", WIDTH // 2, 240, 400, 60),
+        MenuButton("JOIN ROOM", WIDTH // 2, 330, 400, 60),
+        MenuButton("CONTINUE SOLO (F1)", WIDTH // 2, 420, 400, 60),
+    ]
+    menu_selected = 0
+    menu_buttons[menu_selected].selected = True
+
     running = True
     while running:
-        # Yield control for pygbag/browser
-        await asyncio.sleep(0)
+        await asyncio.sleep(0)  # For async loop to breathe
         dt = clock.tick(FPS) / 1000.0
         pulse_timer += dt
         state_timer += dt
         transition.update(dt)
 
-        if state_timer > 2.0:
+        # Handle joining connection below event loop so we don't block during event polling
+        if state == "join_wait" and not teammate_found:
+            room_key = input_text.strip()
+            # Phase 1: Localhost (if testing or server is local)
+            net_temp = NetworkClient(host="localhost", port=5555)
+            connected = net_temp.connect(room_key=room_key)
+            
+            # Phase 2: LAN
+            if not connected:
+                host_ip = await find_lan_host(room_key)
+                if host_ip and host_ip != "127.0.0.1":
+                    net_temp = NetworkClient(host=host_ip, port=5555)
+                    connected = net_temp.connect(room_key=room_key)
+
+            if connected:
+                net = net_temp
+                connection_status = "CONNECTED!"
+                state = "create_wait"
+            else:
+                connection_status = "FAILED TO FIND ROOM"
+                connect_failed = True
+                state = "join_input"
+
+        # Check if server has paired us
+        if net and net.connected and net.room_full and not teammate_found:
             teammate_found = True
+            is_joiner = (net.player_id == 1)
+            reveal_timer = 0.0
+            play_ui_sfx("ui_confirm")
+
+        if teammate_found:
+            reveal_timer += dt
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                return "QUIT"
+                return "QUIT", False, None
             elif event.type == pygame.KEYDOWN and not transition.active:
-                if teammate_found and event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    play_ui_sfx("ui_confirm")
-                    done[0] = True
-                    transition.start(lambda: None)
+                if teammate_found:
+                    if event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        play_ui_sfx("ui_confirm")
+                        done[0] = True
+                        transition.start(lambda: None)
+                elif state == "menu":
+                    if event.key == pygame.K_ESCAPE:
+                        return "QUIT", False, None
+                    elif event.key == pygame.K_F1:
+                        play_ui_sfx("ui_confirm")
+                        return "LOBBY", False, None
+                    elif event.key in (pygame.K_UP, pygame.K_w):
+                        menu_buttons[menu_selected].selected = False
+                        menu_selected = (menu_selected - 1) % len(menu_buttons)
+                        menu_buttons[menu_selected].selected = True
+                        play_ui_sfx("ui_move")
+                    elif event.key in (pygame.K_DOWN, pygame.K_s):
+                        menu_buttons[menu_selected].selected = False
+                        menu_selected = (menu_selected + 1) % len(menu_buttons)
+                        menu_buttons[menu_selected].selected = True
+                        play_ui_sfx("ui_move")
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        play_ui_sfx("ui_confirm")
+                        if menu_selected == 0:  # CREATE ROOM
+                            rk = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
+                            input_text = f"RM-{rk}"
+                            try:
+                                server.start_server_daemon(port=5555)
+                                server.start_lan_broadcaster(input_text, port=5556)
+                                # wait slightly for server bind
+                                net_temp = NetworkClient(host="localhost", port=5555)
+                                if net_temp.connect(room_key=input_text):
+                                    net = net_temp
+                                    connection_status = ""
+                                    state = "create_wait"
+                                else:
+                                    connection_status = "FAILED TO CONNECT TO LOCAL SERVER"
+                                    state = "join_input"
+                            except Exception as e:
+                                print("Failed to host:", e)
+                                connection_status = "FAILED TO HOST"
+                                connect_failed = True
+                                state = "join_input"
+                        elif menu_selected == 1:  # JOIN ROOM
+                            input_text = ""
+                            connection_status = "ENTER ROOM KEY"
+                            connect_failed = False
+                            state = "join_input"
+                        elif menu_selected == 2:  # CONTINUE SOLO
+                            return "LOBBY", False, None
+                elif state == "join_input":
+                    if event.key == pygame.K_ESCAPE:
+                        state = "menu"
+                        play_ui_sfx("ui_exit")
+                    elif event.key == pygame.K_F1:
+                        play_ui_sfx("ui_confirm")
+                        return "LOBBY", False, None
+                    elif event.key == pygame.K_BACKSPACE:
+                        input_text = input_text[:-1]
+                        play_ui_sfx("ui_move")
+                    elif event.key == pygame.K_RETURN:
+                        if input_text.strip():
+                            state = "join_wait"
+                            connection_status = f"SEARCHING FOR ROOM {input_text}..."
+                            # Processed below event loop
+                    elif event.unicode and len(input_text) < 15 and event.unicode.isprintable():
+                        input_text += event.unicode.upper()
+                        play_ui_sfx("ui_move")
+                elif state == "create_wait":
+                    if event.key == pygame.K_ESCAPE:
+                        # Cannot cancel easily since server is daemonized, but we can back out
+                        net = None
+                        state = "menu"
+                        play_ui_sfx("ui_exit")
 
-        # Draw
-        # Cycle through background frames for animation (~15 FPS)
+        # Draw Frame
         frame_idx = int(pulse_timer * 15) % len(anim_background_frames)
         screen.blit(anim_background_frames[frame_idx], (0, 0))
 
         if not teammate_found:
             pulse_alpha = int((math.sin(pulse_timer * 6) * 0.3 + 0.7) * 255)
-            match_txt = "SEARCHING FOR PLAYERS..."
+
+            if state == "menu":
+                match_txt = "MULTIPLAYER MATCHMAKING"
+                for btn in menu_buttons:
+                    btn.draw(screen, pulse_timer)
+                draw_outlined_text(screen, "ENTER: SELECT   ESC: BACK", font_tiny, GRAY, WIDTH // 2, HEIGHT - 50)
+            
+            elif state in ("join_input", "join_wait"):
+                match_txt = "JOIN ROOM"
+                draw_outlined_text(screen, "ROOM KEY:", font_label, LIGHT_BLUE, WIDTH // 2, 200)
+                field_w, field_h = 400, 60
+                field_rect = (WIDTH // 2 - field_w // 2, 230, field_w, field_h)
+                border_c = RED if connect_failed else CYAN
+                draw_panel(screen, field_rect, alpha=150, border_color=border_c)
+
+                cursor = "|" if int(pulse_timer * 2) % 2 == 0 and state == "join_input" else ""
+                draw_outlined_text(screen, input_text + cursor, font_subheader, YELLOW, WIDTH // 2, 260)
+                
+                status_color = RED if connect_failed else WHITE
+                draw_outlined_text(screen, connection_status, font_small, status_color, WIDTH // 2, 310)
+                
+                if state == "join_input":
+                    draw_outlined_text(screen, "PRESS ENTER TO CONNECT", font_tiny, GRAY, WIDTH // 2, 350)
+                    draw_outlined_text(screen, "PRESS ESC TO GO BACK", font_tiny, GRAY, WIDTH // 2, 380)
+
+            elif state == "create_wait":
+                match_txt = "WAITING FOR OPPONENT..."
+                dots = "." * (int(pulse_timer * 2) % 4)
+                draw_outlined_text(screen, f"ROOM KEY: {input_text}{dots}", font_label, GREEN, WIDTH // 2, 220)
+                draw_outlined_text(screen, "SHARE THIS KEY WITH YOUR OPPONENT", font_small, LIGHT_BLUE, WIDTH // 2, 270)
+                draw_outlined_text(screen, connection_status, font_small, WHITE, WIDTH // 2, 310)
+                draw_outlined_text(screen, "PRESS ESC TO CANCEL", font_tiny, GRAY, WIDTH // 2, 360)
         else:
             pulse_alpha = 255
             match_txt = "TEAMMATE FOUND!"
+            role_txt = "YOU ARE RAVEN (P2)" if is_joiner else "YOU ARE LUNA (P1)"
+            draw_outlined_text(screen, role_txt, font_label, GREEN if is_joiner else CYAN, WIDTH // 2, 220)
 
         # Header panel
         panel_height = 80
@@ -938,27 +1160,22 @@ async def screen_matchmaking():
         screen.blit(match_surf, match_rect)
 
         if teammate_found:
-            # Animation timing: pop up over 0.6 seconds
-            progress = min(1.0, (state_timer - 2.0) * 1.6)
+            progress = min(1.0, reveal_timer * 1.6)
             alpha = int(progress * 255)
-            
-            # Pop up vertical offset (slides from below)
             pop_offset = int((1.0 - progress) * 80)
-            
-            # Draw Luna (P1)
+
             if luna_portrait:
                 luna_p = luna_portrait.copy()
                 luna_p.set_alpha(alpha)
-                lx = 320 - luna_p.get_width() // 2
-                ly = 510 - luna_p.get_height() // 2 + pop_offset
+                lx = 400 - luna_p.get_width() // 2
+                ly = 525 - luna_p.get_height() // 2 + pop_offset
                 screen.blit(luna_p, (lx, ly))
 
-            # Draw Raven (P2)
             if raven_portrait:
                 raven_p = raven_portrait.copy()
                 raven_p.set_alpha(alpha)
-                rx = 960 - raven_p.get_width() // 2
-                ry = 510 - raven_p.get_height() // 2 + pop_offset
+                rx = 880 - raven_p.get_width() // 2
+                ry = 525 - raven_p.get_height() // 2 + pop_offset
                 screen.blit(raven_p, (rx, ry))
 
             continue_btn = MenuButton("CONTINUE TO LOBBY", WIDTH // 2, 600, 360, 60, selected=True)
@@ -968,22 +1185,28 @@ async def screen_matchmaking():
         pygame.display.flip()
 
         if done[0] and not transition.active:
-            return "LOBBY"
+            return "LOBBY", is_joiner, net
 
-    return "QUIT"
+    return "QUIT", False, None
 
 
 # ── Screen: Battle Lobby (Weapon Select + Arena Vote) ──────────────────────
 
-async def screen_battle_lobby():
+async def screen_battle_lobby(is_joiner: bool = False, net=None):
     """Combined weapon select + arena vote screen. Returns selections."""
+    # Player roles: Host = Luna (P1, player_id 0), Joiner = Raven (P2, player_id 1)
+    # Each player only selects their OWN weapon.
+
     # Player displays (2 players)
     p1_display = PlayerDisplay(0, 40, 100, 520, 200)
     p2_display = PlayerDisplay(1, 40, 320, 520, 200)
 
+    my_display = p2_display if is_joiner else p1_display
+    opp_display = p1_display if is_joiner else p2_display
+
     # Arena cards
     arenas = []
-    arena_start_x = 620
+    arena_start_x = 840
     arena_start_y = 100
     card_w, card_h = 190, 140
     gap = 15
@@ -994,64 +1217,137 @@ async def screen_battle_lobby():
         ay = arena_start_y + row * (card_h + gap)
         arenas.append(ArenaCard(arena_info, ax, ay, card_w, card_h))
 
-    # Selection state
-    focus = "p1_weapon"  # p1_weapon → p2_weapon → arena → confirm
-    p1_weapon_idx = 0
-    p2_weapon_idx = 0
+    # Selection state — only pick OWN weapon, then arena, then confirm
+    focus = "my_weapon"  # my_weapon → arena → confirm
+    my_weapon_idx = 0
+    opp_weapon_idx = 0   # received from opponent
     arena_idx = 0
     arenas[0].selected = True
-    arenas[0].votes = 1
 
     deploy_timer = 60.0
     vote_count = 0
     total_votes = 2
 
     pulse_timer = 0
+    sync_timer = 0.0
     transition = ScreenTransition()
     result = [None]
-
-    # Confirm button
     confirm_ready = False
+    waiting_for_opponent = False
+
+    def send_selection():
+        """Send current selections to server."""
+        if net and net.connected:
+            weapon_names = list(WeaponCard.WEAPONS.keys())
+            weapon_types = [WeaponCard.WEAPONS[w]["type"] for w in weapon_names]
+            net.send_lobby_selection({
+                "weapon": weapon_types[my_weapon_idx],
+                "arena_id": arenas[arena_idx].arena_id,
+                "arena_name": arenas[arena_idx].name,
+                "timer": deploy_timer,
+            })
 
     running = True
     while running:
-        # Yield control for pygbag/browser
         await asyncio.sleep(0)
         dt = clock.tick(FPS) / 1000.0
         pulse_timer += dt
         deploy_timer -= dt
+        sync_timer += dt
         transition.update(dt)
+
+        # Host sends periodic sync
+        if net and net.connected and not is_joiner:
+            if sync_timer >= 1.0:
+                sync_timer = 0.0
+                send_selection()
+
+        # Poll opponent lobby data
+        if net and net.connected:
+            opp_lobby = net.get_opponent_lobby()
+            if opp_lobby:
+                # Update opponent weapon display
+                weapon_names = list(WeaponCard.WEAPONS.keys())
+                weapon_types = [WeaponCard.WEAPONS[w]["type"] for w in weapon_names]
+                opp_wep = opp_lobby.get("weapon", "")
+                if opp_wep in weapon_types:
+                    opp_weapon_idx = weapon_types.index(opp_wep)
+                    opp_display.select_weapon(opp_weapon_idx)
+                
+                # Update opponent arena vote
+                opp_arena_id = opp_lobby.get("arena_id")
+                for a in arenas:
+                    a.opp_selected = (a.arena_id == opp_arena_id)
+                
+                # Sync deploy timer if we are joiner
+                if is_joiner and "timer" in opp_lobby:
+                    if abs(deploy_timer - opp_lobby["timer"]) > 1.5:
+                        deploy_timer = opp_lobby["timer"]
+
+            # Check if opponent is ready
+            if net.opponent_ready or net.all_ready:
+                opp_display.confirmed = True
+
+            # Auto-ready when timer runs out
+            if deploy_timer <= 0 and not confirm_ready:
+                confirm_ready = True
+                focus = "confirm"
+                if net and net.connected:
+                    net.send_ready()
+                    waiting_for_opponent = True
+                play_ui_sfx("ui_confirm")
+
+            start_condition = False
+            if net and net.connected:
+                start_condition = net.all_ready and confirm_ready
+            else:
+                start_condition = confirm_ready
+
+            # Check if both ready -> start
+            if start_condition or (deploy_timer <= 0 and opp_display.confirmed):
+                if result[0] is None:
+                    weapon_names = list(WeaponCard.WEAPONS.keys())
+                    weapon_types = [WeaponCard.WEAPONS[w]["type"] for w in weapon_names]
+                    my_weapon = weapon_types[my_weapon_idx]
+                    opp_weapon = opp_lobby.get("weapon", "sword") if opp_lobby else "sword"
+
+                    if is_joiner:
+                        p1w, p2w = opp_weapon, my_weapon
+                        # Host wins arena tie-breaker, so use opponent's arena
+                        final_arena_id = opp_lobby.get("arena_id", arenas[arena_idx].arena_id)
+                        final_arena_name = opp_lobby.get("arena_name", arenas[arena_idx].name)
+                    else:
+                        p1w, p2w = my_weapon, opp_weapon
+                        # We are host, we win tie-breaker, use our arena
+                        final_arena_id = arenas[arena_idx].arena_id
+                        final_arena_name = arenas[arena_idx].name
+
+                    result[0] = {
+                        "p1_weapon": p1w,
+                        "p2_weapon": p2w,
+                        "arena_id": final_arena_id,
+                        "arena_name": final_arena_name,
+                    }
+                    if not transition.active:
+                        transition.start(lambda: None)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                return None
+                return None, net
             elif event.type == pygame.KEYDOWN and not transition.active:
-                if focus == "p1_weapon":
+                if focus == "my_weapon":
                     if event.key in (pygame.K_LEFT, pygame.K_a):
-                        p1_weapon_idx = (p1_weapon_idx - 1) % 3
-                        p1_display.select_weapon(p1_weapon_idx)
+                        my_weapon_idx = (my_weapon_idx - 1) % 3
+                        my_display.select_weapon(my_weapon_idx)
                         play_ui_sfx("ui_move")
                     elif event.key in (pygame.K_RIGHT, pygame.K_d):
-                        p1_weapon_idx = (p1_weapon_idx + 1) % 3
-                        p1_display.select_weapon(p1_weapon_idx)
+                        my_weapon_idx = (my_weapon_idx + 1) % 3
+                        my_display.select_weapon(my_weapon_idx)
                         play_ui_sfx("ui_move")
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        p1_display.confirmed = True
+                        my_display.confirmed = True
                         play_ui_sfx("ui_confirm")
-                        focus = "p2_weapon"
-
-                elif focus == "p2_weapon":
-                    if event.key in (pygame.K_LEFT, pygame.K_a):
-                        p2_weapon_idx = (p2_weapon_idx - 1) % 3
-                        p2_display.select_weapon(p2_weapon_idx)
-                        play_ui_sfx("ui_move")
-                    elif event.key in (pygame.K_RIGHT, pygame.K_d):
-                        p2_weapon_idx = (p2_weapon_idx + 1) % 3
-                        p2_display.select_weapon(p2_weapon_idx)
-                        play_ui_sfx("ui_move")
-                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        p2_display.confirmed = True
-                        play_ui_sfx("ui_confirm")
+                        send_selection()
                         focus = "arena"
 
                 elif focus == "arena":
@@ -1076,7 +1372,6 @@ async def screen_battle_lobby():
                         arenas[arena_idx].selected = True
                         play_ui_sfx("ui_move")
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        # Vote for this arena
                         arenas[arena_idx].votes += 1
                         vote_count += 1
                         play_ui_sfx("ui_confirm")
@@ -1085,37 +1380,43 @@ async def screen_battle_lobby():
 
                 elif focus == "confirm":
                     if event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        # Map weapon index to fighter class name
                         weapon_names = list(WeaponCard.WEAPONS.keys())
                         weapon_types = [WeaponCard.WEAPONS[w]["type"] for w in weapon_names]
+                        my_weapon = weapon_types[my_weapon_idx]
 
-                        result[0] = {
-                            "p1_weapon": weapon_types[p1_weapon_idx],
-                            "p2_weapon": weapon_types[p2_weapon_idx],
-                            "arena_id": arenas[arena_idx].arena_id,
-                            "arena_name": arenas[arena_idx].name,
-                        }
-                        play_ui_sfx("ui_confirm")
-                        transition.start(lambda: None)
+                        send_selection()
 
-                # Back button (B/Escape)
+                        if net and net.connected:
+                            # Signal ready and wait for opponent
+                            net.send_ready()
+                            waiting_for_opponent = True
+                            play_ui_sfx("ui_confirm")
+                        else:
+                            # Offline mode — just start
+                            if result[0] is None:
+                                opp_weapon = weapon_types[opp_weapon_idx]
+                                result[0] = {
+                                    "p1_weapon": my_weapon,
+                                    "p2_weapon": opp_weapon,
+                                    "arena_id": arenas[arena_idx].arena_id,
+                                    "arena_name": arenas[arena_idx].name,
+                                }
+                                play_ui_sfx("ui_confirm")
+                                transition.start(lambda: None)
+
+                # Back button (Escape)
                 if event.key == pygame.K_ESCAPE:
                     play_ui_sfx("ui_back")
-                    if focus == "p2_weapon":
-                        p1_display.confirmed = False
-                        focus = "p1_weapon"
-                    elif focus == "arena":
-                        p2_display.confirmed = False
-                        focus = "p2_weapon"
+                    if focus == "arena":
+                        my_display.confirmed = False
+                        focus = "my_weapon"
                     elif focus == "confirm":
                         focus = "arena"
 
         # ── Draw ──
-        # Cycle through background frames for animation (~15 FPS)
         frame_idx = int(pulse_timer * 15) % len(anim_background_frames)
         screen.blit(anim_background_frames[frame_idx], (0, 0))
 
-        # Dim overlay
         dim = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         dim.fill((0, 0, 0, 100))
         screen.blit(dim, (0, 0))
@@ -1126,14 +1427,14 @@ async def screen_battle_lobby():
                            anchor="center")
 
         # Deploy timer
-        deploy_min = int(deploy_timer) // 60
-        deploy_sec = int(deploy_timer) % 60
+        deploy_min = int(max(0, deploy_timer)) // 60
+        deploy_sec = int(max(0, deploy_timer)) % 60
         timer_color = WHITE if deploy_timer > 15 else RED
         draw_outlined_text(screen, f"DEPLOY IN: {deploy_min}:{deploy_sec:02d}", font_label, timer_color,
                            WIDTH - 120, 25)
 
         # Players ready count
-        ready_count = sum([p1_display.confirmed, p2_display.confirmed])
+        ready_count = sum([my_display.confirmed, opp_display.confirmed])
         draw_outlined_text(screen, f"PLAYERS READY: {ready_count}/2", font_small, LIGHT_BLUE,
                            WIDTH // 2, 70)
 
@@ -1142,26 +1443,36 @@ async def screen_battle_lobby():
         p1_display.draw(screen, pulse_timer)
         p2_display.draw(screen, pulse_timer)
 
+        # "YOU" indicator
+        you_y = my_display.rect.y + my_display.rect.h // 2
+        draw_outlined_text(screen, "◄ YOU", font_small, YELLOW,
+                           my_display.rect.right + 30, you_y)
+
         # Right side: Stage select
-        draw_outlined_text(screen, "STAGE SELECT", font_subheader, WHITE, 810, 78, outline_width=3)
+        draw_outlined_text(screen, "STAGE SELECT", font_subheader, WHITE, 1040, 78, outline_width=3)
         for arena in arenas:
             arena.draw(screen, pulse_timer)
 
         # Vote info
         draw_outlined_text(screen, f"VOTES CAST: {vote_count} / {total_votes}", font_small, LIGHT_BLUE,
-                           730, HEIGHT - 100)
-        draw_outlined_text(screen, f"VOTE ENDS: 0:{int(deploy_timer):02d}", font_small, ORANGE,
-                           930, HEIGHT - 100)
+                           935, HEIGHT - 100)
+        draw_outlined_text(screen, f"VOTE ENDS: 0:{int(max(0, deploy_timer)):02d}", font_small, ORANGE,
+                           1140, HEIGHT - 100)
 
-        # Bottom bar - Confirm button
+        # Bottom bar
         draw_panel(screen, (0, HEIGHT - 70, WIDTH, 70), alpha=230, border_color=(60, 70, 90))
-
-        # Input hints
         draw_outlined_text(screen, "ENTER: CONFIRM", font_tiny, GRAY, 80, HEIGHT - 40)
         draw_outlined_text(screen, "ESC: BACK", font_tiny, GRAY, 200, HEIGHT - 40)
 
-        # Big confirm button
-        if confirm_ready:
+        # Big confirm / waiting button
+        if waiting_for_opponent and not (net and net.all_ready):
+            btn_rect = pygame.Rect(WIDTH // 2 - 200, HEIGHT - 65, 400, 55)
+            pygame.draw.rect(screen, (80, 80, 120), btn_rect, border_radius=6)
+            pygame.draw.rect(screen, LIGHT_BLUE, btn_rect, 3, border_radius=6)
+            dots = "." * (int(pulse_timer * 2) % 4)
+            draw_outlined_text(screen, f"WAITING FOR OPPONENT{dots}", font_button, WHITE,
+                               WIDTH // 2, HEIGHT - 38)
+        elif confirm_ready:
             pulse = math.sin(pulse_timer * 5) * 0.5 + 0.5
             btn_color = (40 + int(pulse * 30), 180 + int(pulse * 40), 80 + int(pulse * 30))
             btn_rect = pygame.Rect(WIDTH // 2 - 200, HEIGHT - 65, 400, 55)
@@ -1170,26 +1481,24 @@ async def screen_battle_lobby():
             draw_outlined_text(screen, "CONFIRM SELECTIONS", font_button, WHITE,
                                WIDTH // 2, HEIGHT - 38)
 
-        # Focus indicator (show what's being selected)
+        # Focus indicator
         focus_labels = {
-            "p1_weapon": "Select weapon for LUNA (← → then ENTER)",
-            "p2_weapon": "Select weapon for RAVEN (← → then ENTER)",
+            "my_weapon": "Select YOUR weapon (← → then ENTER)",
             "arena": "Vote for an arena (← → ↑ ↓ then ENTER)",
-            "confirm": "Press ENTER to start battle!",
+            "confirm": "Press ENTER to ready up!",
         }
         draw_outlined_text(screen, focus_labels.get(focus, ""), font_small,
                            YELLOW, WIDTH // 2, HEIGHT - 80)
 
-        # ESC READY hint
         draw_outlined_text(screen, "ESC: BACK", font_tiny, GRAY, WIDTH - 80, HEIGHT - 40)
 
         transition.draw(screen)
         pygame.display.flip()
 
         if result[0] and not transition.active:
-            return result[0]
+            return result[0], net
 
-    return None
+    return None, net
 
 
 # ── Main Flow ──────────────────────────────────────────────────────────────
@@ -1206,31 +1515,24 @@ async def main_menu():
 
         if action == "CREDITS":
             await screen_credits()
-            # After credits, the loop restarts
             continue
 
-        # STEP 2: Matchmaking
-        result = await screen_matchmaking()
-        if result == "QUIT":
+        # STEP 2: Matchmaking (connects to server)
+        action, is_joiner, net = await screen_matchmaking()
+        if action == "QUIT":
             break
 
         # STEP 3: Battle Lobby (weapon select + arena vote)
-        selections = await screen_battle_lobby()
-        if selections is None:
+        lobby_result = await screen_battle_lobby(is_joiner, net=net)
+        if lobby_result is None or lobby_result[0] is None:
             break
+        selections, net = lobby_result
 
         print(f"Game starting with selections: {selections}")
 
         # STEP 4: Launch the actual game with the selections
-        # Map weapon type to fighter class
-        weapon_map = {
-            "sword": "SwordFighter",
-            "bow": "BowFighter",
-            "hammer": "HammerFighter",
-        }
-
         try:
-            from client import SwordFighter, BowFighter, HammerFighter, Game, NetworkClient
+            from client import SwordFighter, BowFighter, HammerFighter, Game
 
             fighter_classes = {
                 "sword": SwordFighter,
@@ -1238,19 +1540,23 @@ async def main_menu():
                 "hammer": HammerFighter,
             }
 
-            # Attempt network connection
-            net = NetworkClient(host="localhost", port=5555)
-            connected = net.connect()
-            if not connected:
-                print("[client] No server found — running in local/offline mode.")
-                net = None
+            # Determine local/remote based on player role
+            if is_joiner:
+                # Joiner is P2 — local fighter uses P2 weapon, remote uses P1 weapon
+                local_cls = fighter_classes[selections["p2_weapon"]]
+                remote_cls = fighter_classes[selections["p1_weapon"]]
+            else:
+                # Host is P1 — local fighter uses P1 weapon, remote uses P2 weapon
+                local_cls = fighter_classes[selections["p1_weapon"]]
+                remote_cls = fighter_classes[selections["p2_weapon"]]
 
             game = Game(
                 arena_id=selections["arena_id"],
-                fighter_cls_local=fighter_classes[selections["p1_weapon"]],
-                fighter_cls_remote=fighter_classes[selections["p2_weapon"]],
+                fighter_cls_local=local_cls,
+                fighter_cls_remote=remote_cls,
                 net=net,
                 audio_manager=audio_manager,
+                local_player_id=1 if is_joiner else 0
             )
 
             # Configure the HUD arena name from lobby selection
@@ -1261,6 +1567,13 @@ async def main_menu():
         except ImportError as e:
             print(f"Could not import client module: {e}")
             print("Game would start with:", selections)
+        finally:
+            if 'net' in locals() and net:
+                net.connected = False
+                if net.sock:
+                    try: net.sock.close()
+                    except: pass
+            server.stop_server_daemon()
 
     pygame.quit()
     sys.exit()

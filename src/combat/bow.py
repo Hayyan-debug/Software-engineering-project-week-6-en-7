@@ -8,7 +8,7 @@ from .weapon import Weapon
 
 class Bow(Weapon):
     def __init__(self) -> None:
-        super().__init__(name="Bow", damage=8, cooldown=0.45, knockback=80)
+        super().__init__(name="Bow", damage=8, cooldown=0.45, knockback=200)
         self.projectile_speed = 700.0
         self.projectile_lifetime = 1.2
         self.projectile_width = 18

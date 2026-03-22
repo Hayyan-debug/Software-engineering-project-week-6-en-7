@@ -55,7 +55,7 @@ DASH_SPEED = 900        # px/s
 DASH_DURATION = 0.15    # s
 DASH_COOLDOWN = 0.8     # s
 WALK_SPEED = 280        # px/s
-KNOCKBACK_FRICTION = 0.85   # multiplied per frame (applied to kb velocity)
+KNOCKBACK_FRICTION = 0.94   # multiplied per frame (applied to kb velocity)
 
 # Knockback thresholds (Smash-style percentage)
 KO_PERCENTAGE = 120     # above this, knockback can kill
@@ -108,45 +108,103 @@ class NetworkClient:
     """
     Sends local player state to the server, receives opponent state back.
     All socket I/O runs on a background thread so the game loop never blocks.
+    Uses JSON message protocol with type envelopes.
     """
 
-    def __init__(self, host: str = "localhost", port: int = 12345):
+    def __init__(self, host: str = "localhost", port: int = 5555):
         self.host = host
         self.port = port
         self.sock: socket.socket | None = None
         self.connected = False
-        self.incoming: dict = {}   # latest snapshot from server
+        self.player_id: int = -1               # assigned by server (0 or 1)
         self.player_name = f"Player_{threading.get_ident() % 1000}"
         self._lock = threading.Lock()
 
-    def connect(self) -> bool:
-        """Try to connect; returns True on success."""
+        # Incoming data buckets
+        self.opponent_state: dict = {}          # latest game-play state
+        self.opponent_lobby: dict = {}          # weapon / arena selections
+        self.room_full = False                  # True once 2 players paired
+        self.opponent_ready = False
+        self.all_ready = False
+        self.opponent_disconnected = False
+        self.room_players: list[dict] = []      # [{player_id, name}, ...]
+
+    # ── Connection ──────────────────────────────────────────────────────
+
+    def connect(self, room_key: str = "DEFAULT") -> bool:
+        """Try to connect to the given room; returns True on success."""
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.settimeout(5)
             self.sock.connect((self.host, self.port))
-            # Handshake: Receive welcome, send name
-            self.sock.recv(1024) # Skip "Welkom!"
-            self.sock.sendall(self.player_name.encode() + b"\n")
+            self.sock.settimeout(10)
+
+            # Send join_room
+            join_msg = json.dumps({"type": "join_room", "room_key": room_key, "name": self.player_name}) + "\n"
+            self.sock.sendall(join_msg.encode())
+
+            # Wait for welcome message with player_id
+            buf = b""
+            while b"\n" not in buf:
+                chunk = self.sock.recv(4096)
+                if not chunk:
+                    return False
+                buf += chunk
+
+            line, _ = buf.split(b"\n", 1)
+            welcome = json.loads(line.decode())
             
+            if welcome.get("type") == "error":
+                print(f"[client] Server error: {welcome.get('message')}")
+                return False
+            if welcome.get("type") != "welcome":
+                return False
+                
+            self.player_id = welcome["player_id"]
+
             self.connected = True
+            self.sock.settimeout(None)  # blocking recv in thread
             threading.Thread(target=self._recv_loop, daemon=True).start()
+            threading.Thread(target=self._heartbeat_loop, daemon=True).start()
             return True
         except OSError:
             return False
 
-    def send_state(self, state: dict) -> None:
-        """Send local player state as JSON (non-blocking best-effort)."""
+    # ── Sending ─────────────────────────────────────────────────────────
+
+    def _send(self, msg: dict) -> None:
         if not self.connected or self.sock is None:
             return
         try:
-            data = json.dumps(state).encode() + b"\n"
-            self.sock.sendall(data)
+            self.sock.sendall((json.dumps(msg) + "\n").encode())
         except OSError:
             self.connected = False
 
-    def get_incoming(self) -> dict:
+    def send_state(self, state: dict) -> None:
+        """Send game-play state to server."""
+        self._send({"type": "state", "data": state})
+
+    def send_lobby_selection(self, selection: dict) -> None:
+        """Send weapon / arena selection during lobby."""
+        self._send({"type": "lobby_selection", "data": selection})
+
+    def send_ready(self) -> None:
+        """Signal that this player is ready to start."""
+        self._send({"type": "ready"})
+
+    # ── Receiving ───────────────────────────────────────────────────────
+
+    def get_opponent_state(self) -> dict:
         with self._lock:
-            return dict(self.incoming)
+            snap = dict(self.opponent_state)
+            # Clear consumed hit_events
+            if "hit_events" in self.opponent_state:
+                self.opponent_state["hit_events"] = []
+            return snap
+
+    def get_opponent_lobby(self) -> dict:
+        with self._lock:
+            return dict(self.opponent_lobby)
 
     def _recv_loop(self) -> None:
         buffer = b""
@@ -158,18 +216,46 @@ class NetworkClient:
                 buffer += chunk
                 while b"\n" in buffer:
                     line, buffer = buffer.split(b"\n", 1)
-                    snapshot = json.loads(line.decode())
-                    with self._lock:
-                        # Server sends game_state = {"players": {"name": state}}
-                        players = snapshot.get("players", {})
-                        # Filter for the FIRST other player (simple 2-player assumption)
-                        for name, state in players.items():
-                            if name != self.player_name:
-                                self.incoming = state
-                                break
+                    if not line.strip():
+                        continue
+                    msg = json.loads(line.decode())
+                    self._handle_message(msg)
             except Exception:
                 break
         self.connected = False
+
+    def _handle_message(self, msg: dict) -> None:
+        msg_type = msg.get("type", "")
+        with self._lock:
+            if msg_type == "opponent_state":
+                new_state = msg.get("data", {})
+                new_hits = new_state.get("hit_events", [])
+                old_hits = self.opponent_state.get("hit_events", [])
+                
+                # Merge old+new hit states so we don't drop events in high framerate bursts
+                if new_hits:
+                    new_state["hit_events"] = old_hits + new_hits
+                else:
+                    new_state["hit_events"] = old_hits
+                    
+                self.opponent_state = new_state
+            elif msg_type == "opponent_lobby":
+                self.opponent_lobby = msg.get("data", {})
+            elif msg_type == "room_full":
+                self.room_full = True
+                self.room_players = msg.get("players", [])
+            elif msg_type == "opponent_ready":
+                self.opponent_ready = True
+            elif msg_type == "all_ready":
+                self.all_ready = True
+            elif msg_type == "opponent_disconnected":
+                self.opponent_disconnected = True
+
+    def _heartbeat_loop(self) -> None:
+        while self.connected:
+            self._send({"type": "heartbeat"})
+            import time
+            time.sleep(2)
 
 
 
@@ -534,22 +620,34 @@ class Fighter(ABC):
             "y":           self.y,
             "vx":          self.vx,
             "vy":          self.vy,
+            "kb_vx":       self.kb_vx,
+            "kb_vy":       self.kb_vy,
             "facing":      self.facing_right,
             "damage_pct":  self.damage_pct,
             "is_dead":     self.is_dead,
             "dashing":     self.dashing,
+            "anim_state":  self.anim_state,
+            "anim_frame":  self.anim_frame,
+            "attack_timer": self.attack_timer,
+            "on_ground":   self.on_ground,
         }
 
     def from_dict(self, data: dict) -> None:
         """Apply a server snapshot (used for the remote player)."""
-        self.x           = data.get("x",          self.x)
-        self.y           = data.get("y",          self.y)
-        self.vx          = data.get("vx",          self.vx)
-        self.vy          = data.get("vy",          self.vy)
-        self.facing_right = data.get("facing",     self.facing_right)
-        self.damage_pct  = data.get("damage_pct",  self.damage_pct)
-        self.is_dead     = data.get("is_dead",     self.is_dead)
-        self.dashing     = data.get("dashing",     self.dashing)
+        self.x            = data.get("x",            self.x)
+        self.y            = data.get("y",            self.y)
+        self.vx           = data.get("vx",           self.vx)
+        self.vy           = data.get("vy",           self.vy)
+        self.kb_vx        = data.get("kb_vx",        self.kb_vx)
+        self.kb_vy        = data.get("kb_vy",        self.kb_vy)
+        self.facing_right = data.get("facing",       self.facing_right)
+        self.damage_pct   = data.get("damage_pct",   self.damage_pct)
+        self.is_dead      = data.get("is_dead",      self.is_dead)
+        self.dashing      = data.get("dashing",      self.dashing)
+        self.anim_state   = data.get("anim_state",   self.anim_state)
+        self.anim_frame   = data.get("anim_frame",   self.anim_frame)
+        self.attack_timer = data.get("attack_timer", self.attack_timer)
+        self.on_ground    = data.get("on_ground",    self.on_ground)
         self.rect.topleft = (int(self.x), int(self.y))
 
  
@@ -1079,10 +1177,11 @@ class Game:
     """
 
     def __init__(self, arena_id: int = 0,
-                 fighter_cls_local=SwordFighter,
-                 fighter_cls_remote=HammerFighter,
+                 fighter_cls_local=None,
+                 fighter_cls_remote=None,
                  net: NetworkClient | None = None,
-                 audio_manager: AudioManager | None = None):
+                 audio_manager: AudioManager | None = None,
+                 local_player_id: int = 0):
 
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("Gauntlet Galaxy")
@@ -1102,10 +1201,18 @@ class Game:
             except Exception as e:
                 print(f"Could not load map background {path}: {e}")
 
-        # Local player is always index 0
-        self.local_fighter  = fighter_cls_local( 300, 400, player_id=0)
-        self.remote_fighter = fighter_cls_remote(900, 400, player_id=1)
-        self.fighters = [self.local_fighter, self.remote_fighter]
+        remote_player_id = 1 if local_player_id == 0 else 0
+        if fighter_cls_local is None: fighter_cls_local = SwordFighter
+        if fighter_cls_remote is None: fighter_cls_remote = HammerFighter
+        
+        self.local_fighter  = fighter_cls_local( 300, 400, player_id=local_player_id)
+        self.remote_fighter = fighter_cls_remote(900, 400, player_id=remote_player_id)
+        
+        # We need fighters ordered by player_id to render HUD correctly
+        if local_player_id == 0:
+            self.fighters = [self.local_fighter, self.remote_fighter]
+        else:
+            self.fighters = [self.remote_fighter, self.local_fighter]
 
         self.audio_manager = audio_manager
         self.input_handler = InputHandler("wasd", audio_manager=self.audio_manager)
@@ -1156,12 +1263,16 @@ class Game:
             # --- Input ---
             if not stopped:
                 self.input_handler.process(self.local_fighter, keys, events)
-                for fighter in self.fighters:
-                    self._spawn_projectiles_from_attacks(fighter, fighter.consume_pending_attacks())
+                self._spawn_projectiles_from_attacks(self.local_fighter,
+                                                     self.local_fighter.consume_pending_attacks())
 
-                # --- Physics update ---
-                for fighter in self.fighters:
-                    fighter.update(dt, self.tiles)
+                # Physics update — only local fighter when networked
+                self.local_fighter.update(dt, self.tiles)
+                if not (self.net and self.net.connected):
+                    # Offline mode: also run physics for remote fighter
+                    self.remote_fighter.update(dt, self.tiles)
+                    self._spawn_projectiles_from_attacks(self.remote_fighter,
+                                                         self.remote_fighter.consume_pending_attacks())
 
                 # --- Knockback on player collision ---
                 self._check_player_collision()
@@ -1173,17 +1284,49 @@ class Game:
                 for fighter in self.fighters:
                     if fighter.is_dead:
                         self.hud.lose_stock(fighter.player_id)
-                        fighter.respawn(640, 200)
+                        # Immediately stop being dead so we don't spam lose_stock
+                        fighter.is_dead = False
+                        
+                        # Only Authority (the local owner) actually computes the respawn coords
+                        if fighter is self.local_fighter or not (self.net and self.net.connected):
+                            fighter.respawn(640, 200)
 
                 # --- Update HUD timer ---
                 self.hud.update(dt)
 
             # --- Networking ---
             if self.net and self.net.connected:
-                self.net.send_state(self.local_fighter.to_dict())
-                snapshot = self.net.get_incoming()
+                state = self.local_fighter.to_dict()
+                state["stocks"] = self.hud.stocks[self.local_fighter.player_id]
+                state["hit_events"] = getattr(self.local_fighter, "pending_hit_events", [])
+                self.net.send_state(state)
+                # clear after sending
+                self.local_fighter.pending_hit_events = []
+                
+                snapshot = self.net.get_opponent_state()
                 if snapshot:
                     self.remote_fighter.from_dict(snapshot)
+                    if "stocks" in snapshot:
+                        new_stock = snapshot["stocks"]
+                        if new_stock < self.hud.stocks[self.remote_fighter.player_id]:
+                            self.hud.stocks[self.remote_fighter.player_id] = new_stock
+                            if new_stock <= 0:
+                                self.hud.set_winner(self.local_fighter.player_id)
+                    if "hit_events" in snapshot:
+                        for event in snapshot["hit_events"]:
+                            # The remote player is telling us they hit us.
+                            # We take the damage gracefully because they are the authority on their weapon connecting.
+                            self.local_fighter.damage_pct += event["damage"]
+                            self.local_fighter.receive_knockback(event["attacker_x"], event["kb"])
+                            self.hit_effects.append(create_hit_effect(*self.local_fighter.rect.center))
+                            
+                            trigger_hit_stop(self.hit_stop, event.get("weapon_name", "Sword"))
+                            trigger_screen_shake(self.screen_shake, event.get("weapon_name", "Sword"))
+                            if self.audio_manager:
+                                self.audio_manager.play_sfx(f"hit_{event.get('weapon_name', 'Sword').lower()}", fallback="ui_confirm")
+                # Handle opponent disconnect
+                if self.net.opponent_disconnected:
+                    self.hud.set_winner(self.local_fighter.player_id)
 
             # --- Render ---
             self._draw(dt)
@@ -1229,8 +1372,23 @@ class Game:
                 if target_key in hit_targets:
                     continue
                 if any(hitbox.colliderect(target.rect) for hitbox in active_hitboxes):
-                    target.damage_pct += weapon.damage
-                    target.receive_knockback(attacker.rect.centerx, weapon.knockback)
+                    if target is self.remote_fighter:
+                        # Register the hit we effectively scored on the network opponent
+                        # The network opponent has absolute authority over their damage, so we must SEND this!
+                        if not hasattr(self.local_fighter, "pending_hit_events"):
+                            self.local_fighter.pending_hit_events = []
+                            
+                        self.local_fighter.pending_hit_events.append({
+                            "damage": weapon.damage,
+                            "kb": weapon.knockback,
+                            "attacker_x": attacker.rect.centerx,
+                            "weapon_name": weapon.name
+                        })
+                    else:
+                        # Offline / AI hits processed normally
+                        target.damage_pct += weapon.damage
+                        target.receive_knockback(attacker.rect.centerx, weapon.knockback)
+                        
                     self.hit_effects.append(create_hit_effect(*target.rect.center))
                     trigger_hit_stop(self.hit_stop, weapon.name)
                     trigger_screen_shake(self.screen_shake, weapon.name)
@@ -1262,17 +1420,25 @@ class Game:
                 if target is owner:
                     continue
                 if projectile.rect.colliderect(target.rect):
-                    target.damage_pct += projectile.damage
-                    target.receive_knockback(owner.rect.centerx, projectile.knockback)
-                    self.hit_effects.append(create_hit_effect(*target.rect.center))
                     owner_weapon_name = owner.weapon.name if owner.weapon is not None else "Bow"
+                    if target is self.remote_fighter:
+                        if not hasattr(self.local_fighter, "pending_hit_events"):
+                            self.local_fighter.pending_hit_events = []
+                        self.local_fighter.pending_hit_events.append({
+                            "damage": projectile.damage,
+                            "kb": projectile.knockback,
+                            "attacker_x": owner.rect.centerx,
+                            "weapon_name": owner_weapon_name
+                        })
+                    else:
+                        target.damage_pct += projectile.damage
+                        target.receive_knockback(owner.rect.centerx, projectile.knockback)
+                        
+                    self.hit_effects.append(create_hit_effect(*target.rect.center))
                     trigger_hit_stop(self.hit_stop, owner_weapon_name)
                     trigger_screen_shake(self.screen_shake, owner_weapon_name)
                     if self.audio_manager is not None:
-                        # Same fallback chain for projectiles
-                        self.audio_manager.play_sfx(f"hit_{owner_weapon_name.lower()}", 
-                                                   fallback="hit") or \
-                        self.audio_manager.play_sfx("ui_click")
+                        self.audio_manager.play_sfx(f"hit_{owner_weapon_name.lower()}", fallback="ui_confirm")
                     hit_target = True
                     break
 
@@ -1333,7 +1499,7 @@ def main() -> None:
     audio_manager.preload()
 
     # Attempt to connect to server (optional — game runs offline too)
-    net = NetworkClient(host="localhost", port=12345)
+    net = NetworkClient(host="localhost", port=5555)
     connected = net.connect()
     if not connected:
         print("[client] No server found — running in local/offline mode.")

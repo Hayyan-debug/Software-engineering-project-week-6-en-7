@@ -3,7 +3,7 @@ from .weapon import Weapon
 
 class Sword(Weapon):
     def __init__(self):
-        super().__init__(name="Sword", damage=10, cooldown=0.35, knockback=100)
+        super().__init__(name="Sword", damage=10, cooldown=0.35, knockback=250)
         self.swing_duration = 0.12
         self.swing_timer = 0.0
         self.active_hitbox = None

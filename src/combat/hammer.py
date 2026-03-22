@@ -7,7 +7,7 @@ from .weapon import Weapon
 
 class Hammer(Weapon):
     def __init__(self) -> None:
-        super().__init__(name="Hammer", damage=18, cooldown=0.75, knockback=170)
+        super().__init__(name="Hammer", damage=18, cooldown=0.75, knockback=450)
         self.base_damage = self.damage
         self.base_knockback = self.knockback
         self.windup_duration = 0.5
