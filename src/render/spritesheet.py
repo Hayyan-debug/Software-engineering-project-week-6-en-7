@@ -1,8 +1,13 @@
+"""Spritesheet loading and frame extraction utilities."""
+
 import pygame
 
 
 class SpritesheetHandler:
+    """Load a spritesheet and expose frames by index."""
+
     def __init__(self, path: str, cols: int = 6, rows: int = 3):
+        """Load spritesheet image and split it into a fixed grid of frames."""
         try:
             self.sheet = pygame.image.load(path).convert_alpha()
             self.sheet.set_colorkey((255, 255, 255))
@@ -26,6 +31,7 @@ class SpritesheetHandler:
                     self.frames.append(pygame.Surface((self.frame_w, self.frame_h), pygame.SRCALPHA))
 
     def get_frame(self, index: int) -> pygame.Surface:
+        """Return frame by index, falling back to frame 0 when out of bounds."""
         if 0 <= index < len(self.frames):
             return self.frames[index]
         return self.frames[0]

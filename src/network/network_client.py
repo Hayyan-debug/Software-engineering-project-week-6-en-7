@@ -1,3 +1,5 @@
+"""TCP client for lobby sync and realtime gameplay state exchange."""
+
 import json
 import socket
 import threading
@@ -11,6 +13,7 @@ class NetworkClient:
     """
 
     def __init__(self, host: str = "localhost", port: int = 5555):
+        """Initialize connection settings and local cache/state flags."""
         self.host = host
         self.port = port
         self.sock: socket.socket | None = None
@@ -70,6 +73,7 @@ class NetworkClient:
 
     # Sending
     def _send(self, msg: dict) -> None:
+        """Send one JSON message to the server if connected."""
         if not self.connected or self.sock is None:
             return
         try:
@@ -91,6 +95,7 @@ class NetworkClient:
 
     # Receiving
     def get_opponent_state(self) -> dict:
+        """Return latest opponent gameplay snapshot and consume hit events."""
         with self._lock:
             snap = dict(self.opponent_state)
             # Clear consumed hit_events
@@ -99,10 +104,12 @@ class NetworkClient:
             return snap
 
     def get_opponent_lobby(self) -> dict:
+        """Return latest opponent lobby selection snapshot."""
         with self._lock:
             return dict(self.opponent_lobby)
 
     def _recv_loop(self) -> None:
+        """Continuously receive newline-delimited JSON messages."""
         buffer = b""
         while self.connected:
             try:
@@ -121,6 +128,7 @@ class NetworkClient:
         self.connected = False
 
     def _handle_message(self, msg: dict) -> None:
+        """Apply one server message to local client state."""
         msg_type = msg.get("type", "")
         with self._lock:
             if msg_type == "opponent_state":
@@ -148,6 +156,7 @@ class NetworkClient:
                 self.opponent_disconnected = True
 
     def _heartbeat_loop(self) -> None:
+        """Send periodic heartbeat messages while connected."""
         while self.connected:
             self._send({"type": "heartbeat"})
             import time
