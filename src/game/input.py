@@ -15,11 +15,11 @@ class InputHandler:
         "wasd": {
             "left": pygame.K_a,
             "right": pygame.K_d,
-            "jump": pygame.K_w,
+            "jump": [pygame.K_w, pygame.K_SPACE],
             "duck": pygame.K_s,
             "shield": pygame.K_k,
             "dash": pygame.K_LSHIFT,
-            "special": pygame.K_f,
+            "special": pygame.K_j,
         },
         "arrows": {
             "left": pygame.K_LEFT,
@@ -58,7 +58,7 @@ class InputHandler:
         # --- Pressed-this-frame keys -> one-shot actions ---
         for event in events:
             if event.type == pygame.KEYDOWN:
-                if event.key == self.keys["jump"]:
+                if event.key in self.keys["jump"]:
                     fighter.jump()
                 if event.key == self.keys["dash"]:
                     fighter.dash(direction if direction != 0 else (1 if fighter.facing_right else -1))
