@@ -27,6 +27,7 @@ class AudioManager:
         "hammer": ("hammer_hit_1", "hammer_hit_2"),
         "bow": ("bow_hit_1", "bow_hit_2"),
     }
+    combat_combo_sfx_variants: tuple[str, ...] = ("combo_hit_1",)
     combat_ko_sfx_variants: tuple[str, ...] = ("KO_1", "KO_2", "KO_3", "KO_4", "KO_5")
     movement_opponent_volume_scale = 0.6
 
@@ -186,6 +187,9 @@ class AudioManager:
 
     def play_ko_sfx(self) -> bool:
         return self._play_variant_sfx(self.combat_ko_sfx_variants)
+
+    def play_combo_sfx(self) -> bool:
+        return self._play_variant_sfx(self.combat_combo_sfx_variants)
 
     def _play_variant_sfx(self, keys: tuple[str, ...], volume_scale: float = 1.0) -> bool:
         if not self._enabled or self._sfx_muted:

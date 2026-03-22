@@ -30,6 +30,11 @@ ARENA_MAPS = {
 
 ORANGE = (255, 180, 80)
 BG_COLOR = (20, 20, 35)
+COMBO_TIMEOUT = 0.8
+COMBO_BONUS_PER_HIT = 0.10
+COMBO_MAX_BONUS = 0.50
+COMBO_POPUP_DURATION = 0.5
+COMBO_POPUP_RISE_SPEED = 45.0
 
 
 class Game:
@@ -102,6 +107,11 @@ class Game:
         self.hit_effects: list[HitEffect] = []
         self.hit_stop = HitStopState()
         self.screen_shake = ScreenShakeState()
+        self.combo_state: dict[int, dict[str, float | int | bool]] = {}
+        self.combo_popups: list[dict[str, float | str]] = []
+        if not pygame.font.get_init():
+            pygame.font.init()
+        self.combo_font = pygame.font.SysFont("impact", 34)
 
         # Background (solid color fallback if no asset)
         self.bg_color = BG_COLOR
@@ -139,6 +149,8 @@ class Game:
             keys = pygame.key.get_pressed()
             self.hit_stop = update_hit_stop(self.hit_stop, dt)
             self.screen_shake = update_screen_shake(self.screen_shake, dt)
+            self._update_combo_state(dt)
+            self._update_combo_popups(dt)
             stopped = is_hit_stopped(self.hit_stop)
 
             # --- Input ---
@@ -168,6 +180,7 @@ class Game:
                 # --- Respawn & Stock Loss ---
                 for fighter in self.fighters:
                     if fighter.is_dead:
+                        self._break_combo(fighter)
                         if self.audio_manager is not None:
                             self.audio_manager.play_ko_sfx()
                         self.hud.lose_stock(fighter.player_id)
@@ -204,12 +217,23 @@ class Game:
                             # The remote player is telling us they hit us.
                             # We take the damage gracefully because they are the authority on their weapon connecting.
                             if self.local_fighter.shielding:
+                                self._break_combo(self.remote_fighter)
                                 continue
                             self.local_fighter.damage_pct += event["damage"]
                             self.local_fighter.receive_knockback(event["attacker_x"], event["kb"])
+                            self._break_combo(self.local_fighter)
+                            self._record_combo_popup(
+                                self.local_fighter.rect.centerx,
+                                self.local_fighter.rect.top,
+                                int(event.get("combo_count", 1)),
+                            )
                             self.hit_effects.append(create_hit_effect(*self.local_fighter.rect.center))
 
-                            trigger_hit_stop(self.hit_stop, event.get("weapon_name", "Sword"))
+                            trigger_hit_stop(
+                                self.hit_stop,
+                                event.get("weapon_name", "Sword"),
+                                combo_count=int(event.get("combo_count", 1)),
+                            )
                             trigger_screen_shake(self.screen_shake, event.get("weapon_name", "Sword"))
                             if self.audio_manager:
                                 self.audio_manager.play_combat_hit_sfx(event.get("weapon_name", "Sword"))
@@ -263,6 +287,17 @@ class Game:
                     continue
                 if any(hitbox.colliderect(target.rect) for hitbox in active_hitboxes):
                     blocked = target.shielding
+                    hit_combo_count = 1
+                    if blocked:
+                        self._break_combo(attacker)
+                    else:
+                        combo_count, combo_mult = self._advance_combo(attacker)
+                        hit_combo_count = combo_count
+                        scaled_damage = weapon.damage * combo_mult
+                        scaled_knockback = weapon.knockback * combo_mult
+                        self._break_combo(target)
+                        self._record_combo_popup(target.rect.centerx, target.rect.top, combo_count)
+
                     if not blocked and is_networked and target is self.remote_fighter:
                         # Register the hit we effectively scored on the network opponent
                         # The network opponent has absolute authority over their damage, so we must SEND this!
@@ -271,19 +306,21 @@ class Game:
 
                         self.local_fighter.pending_hit_events.append(
                             {
-                                "damage": weapon.damage,
-                                "kb": weapon.knockback,
+                                "damage": scaled_damage,
+                                "kb": scaled_knockback,
                                 "attacker_x": attacker.rect.centerx,
                                 "weapon_name": weapon.name,
+                                "combo_count": combo_count,
+                                "combo_mult": combo_mult,
                             }
                         )
                     elif not blocked:
                         # Offline / AI hits processed normally
-                        target.damage_pct += weapon.damage
-                        target.receive_knockback(attacker.rect.centerx, weapon.knockback)
+                        target.damage_pct += scaled_damage
+                        target.receive_knockback(attacker.rect.centerx, scaled_knockback)
 
                     self.hit_effects.append(create_hit_effect(*target.rect.center))
-                    trigger_hit_stop(self.hit_stop, weapon.name)
+                    trigger_hit_stop(self.hit_stop, weapon.name, combo_count=hit_combo_count)
                     trigger_screen_shake(self.screen_shake, weapon.name)
                     if self.audio_manager is not None:
                         self.audio_manager.play_combat_hit_sfx(weapon.name)
@@ -313,23 +350,36 @@ class Game:
                 if projectile.rect.colliderect(target.rect):
                     owner_weapon_name = owner.weapon.name if owner.weapon is not None else "Bow"
                     blocked = target.shielding
+                    hit_combo_count = 1
+                    if blocked:
+                        self._break_combo(owner)
+                    else:
+                        combo_count, combo_mult = self._advance_combo(owner)
+                        hit_combo_count = combo_count
+                        scaled_damage = projectile.damage * combo_mult
+                        scaled_knockback = projectile.knockback * combo_mult
+                        self._break_combo(target)
+                        self._record_combo_popup(target.rect.centerx, target.rect.top, combo_count)
+
                     if not blocked and is_networked and target is self.remote_fighter:
                         if not hasattr(self.local_fighter, "pending_hit_events"):
                             self.local_fighter.pending_hit_events = []
                         self.local_fighter.pending_hit_events.append(
                             {
-                                "damage": projectile.damage,
-                                "kb": projectile.knockback,
+                                "damage": scaled_damage,
+                                "kb": scaled_knockback,
                                 "attacker_x": owner.rect.centerx,
                                 "weapon_name": owner_weapon_name,
+                                "combo_count": combo_count,
+                                "combo_mult": combo_mult,
                             }
                         )
                     elif not blocked:
-                        target.damage_pct += projectile.damage
-                        target.receive_knockback(owner.rect.centerx, projectile.knockback)
+                        target.damage_pct += scaled_damage
+                        target.receive_knockback(owner.rect.centerx, scaled_knockback)
 
                     self.hit_effects.append(create_hit_effect(*target.rect.center))
-                    trigger_hit_stop(self.hit_stop, owner_weapon_name)
+                    trigger_hit_stop(self.hit_stop, owner_weapon_name, combo_count=hit_combo_count)
                     trigger_screen_shake(self.screen_shake, owner_weapon_name)
                     if self.audio_manager is not None:
                         self.audio_manager.play_combat_hit_sfx(owner_weapon_name)
@@ -368,6 +418,7 @@ class Game:
 
         # Hit effects
         draw_hit_effects(self.screen, self.hit_effects, world_cam_x, world_cam_y)
+        self._draw_combo_popups(self.screen, world_cam_x, world_cam_y)
 
         # HUD
         self.hud.draw(self.screen)
@@ -380,3 +431,75 @@ class Game:
             alpha = int(brightness * 200)
             color = (alpha, alpha, alpha)
             pygame.draw.circle(self.screen, color, (sx - cam_x, sy - cam_y), radius)
+
+    def _combo_entry(self, fighter: Fighter) -> dict[str, float | int | bool]:
+        key = id(fighter)
+        if key not in self.combo_state:
+            self.combo_state[key] = {"count": 0, "active": False, "time_left": 0.0}
+        return self.combo_state[key]
+
+    def _combo_multiplier(self, combo_count: int) -> float:
+        bonus = min(COMBO_MAX_BONUS, max(0, combo_count - 1) * COMBO_BONUS_PER_HIT)
+        return 1.0 + bonus
+
+    def _advance_combo(self, attacker: Fighter) -> tuple[int, float]:
+        entry = self._combo_entry(attacker)
+        if bool(entry["active"]) and float(entry["time_left"]) > 0:
+            entry["count"] = int(entry["count"]) + 1
+        else:
+            entry["count"] = 1
+        entry["active"] = True
+        entry["time_left"] = COMBO_TIMEOUT
+        combo_count = int(entry["count"])
+        return combo_count, self._combo_multiplier(combo_count)
+
+    def _break_combo(self, fighter: Fighter) -> None:
+        entry = self._combo_entry(fighter)
+        entry["count"] = 0
+        entry["active"] = False
+        entry["time_left"] = 0.0
+
+    def _update_combo_state(self, dt: float) -> None:
+        for entry in self.combo_state.values():
+            if not bool(entry["active"]):
+                continue
+            entry["time_left"] = max(0.0, float(entry["time_left"]) - dt)
+            if float(entry["time_left"]) <= 0.0:
+                entry["count"] = 0
+                entry["active"] = False
+
+    def _record_combo_popup(self, x: int, y: int, combo_count: int) -> None:
+        if combo_count < 2:
+            return
+        self.combo_popups.append(
+            {
+                "x": float(x),
+                "y": float(y),
+                "time_left": COMBO_POPUP_DURATION,
+                "duration": COMBO_POPUP_DURATION,
+                "text": f"{combo_count} HIT!",
+            }
+        )
+        if self.audio_manager is not None:
+            self.audio_manager.play_combo_sfx()
+
+    def _update_combo_popups(self, dt: float) -> None:
+        remaining: list[dict[str, float | str]] = []
+        for popup in self.combo_popups:
+            time_left = max(0.0, float(popup["time_left"]) - dt)
+            if time_left <= 0.0:
+                continue
+            popup["time_left"] = time_left
+            popup["y"] = float(popup["y"]) - (COMBO_POPUP_RISE_SPEED * dt)
+            remaining.append(popup)
+        self.combo_popups = remaining
+
+    def _draw_combo_popups(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        for popup in self.combo_popups:
+            text = str(popup["text"])
+            surf = self.combo_font.render(text, True, (255, 235, 120))
+            alpha_ratio = float(popup["time_left"]) / max(float(popup["duration"]), 0.001)
+            surf.set_alpha(int(255 * alpha_ratio))
+            draw_x = int(float(popup["x"])) - cam_x - (surf.get_width() // 2)
+            draw_y = int(float(popup["y"])) - cam_y - surf.get_height()
+            surface.blit(surf, (draw_x, draw_y))
