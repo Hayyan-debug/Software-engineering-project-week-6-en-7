@@ -280,6 +280,12 @@ class Fighter(ABC):
                 self.dashing = False
                 self.vx = self.dash_direction * self.WALK_SPEED * 0.4
 
+    def _update_dash(self, dt: float) -> None:
+        """Maintain dash movement while dash state is active."""
+        _ = dt
+        self.vx = self.dash_direction * DASH_SPEED
+        self.vy = 0.0
+
     def _apply_gravity(self, dt: float) -> None:
         """Apply gravity while respecting terminal fall speed."""
         self.vy += GRAVITY * dt
