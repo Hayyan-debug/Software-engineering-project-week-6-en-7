@@ -203,6 +203,8 @@ class Game:
                         for event in snapshot["hit_events"]:
                             # The remote player is telling us they hit us.
                             # We take the damage gracefully because they are the authority on their weapon connecting.
+                            if self.local_fighter.shielding:
+                                continue
                             self.local_fighter.damage_pct += event["damage"]
                             self.local_fighter.receive_knockback(event["attacker_x"], event["kb"])
                             self.hit_effects.append(create_hit_effect(*self.local_fighter.rect.center))
@@ -260,7 +262,8 @@ class Game:
                 if target_key in hit_targets:
                     continue
                 if any(hitbox.colliderect(target.rect) for hitbox in active_hitboxes):
-                    if is_networked and target is self.remote_fighter:
+                    blocked = target.shielding
+                    if not blocked and is_networked and target is self.remote_fighter:
                         # Register the hit we effectively scored on the network opponent
                         # The network opponent has absolute authority over their damage, so we must SEND this!
                         if not hasattr(self.local_fighter, "pending_hit_events"):
@@ -274,7 +277,7 @@ class Game:
                                 "weapon_name": weapon.name,
                             }
                         )
-                    else:
+                    elif not blocked:
                         # Offline / AI hits processed normally
                         target.damage_pct += weapon.damage
                         target.receive_knockback(attacker.rect.centerx, weapon.knockback)
@@ -309,7 +312,8 @@ class Game:
                     continue
                 if projectile.rect.colliderect(target.rect):
                     owner_weapon_name = owner.weapon.name if owner.weapon is not None else "Bow"
-                    if is_networked and target is self.remote_fighter:
+                    blocked = target.shielding
+                    if not blocked and is_networked and target is self.remote_fighter:
                         if not hasattr(self.local_fighter, "pending_hit_events"):
                             self.local_fighter.pending_hit_events = []
                         self.local_fighter.pending_hit_events.append(
@@ -320,7 +324,7 @@ class Game:
                                 "weapon_name": owner_weapon_name,
                             }
                         )
-                    else:
+                    elif not blocked:
                         target.damage_pct += projectile.damage
                         target.receive_knockback(owner.rect.centerx, projectile.knockback)
 

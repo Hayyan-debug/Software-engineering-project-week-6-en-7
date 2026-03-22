@@ -17,6 +17,7 @@ class InputHandler:
             "right": pygame.K_d,
             "jump": pygame.K_w,
             "duck": pygame.K_s,
+            "shield": pygame.K_k,
             "dash": pygame.K_LSHIFT,
             "special": pygame.K_f,
         },
@@ -25,6 +26,7 @@ class InputHandler:
             "right": pygame.K_RIGHT,
             "jump": pygame.K_UP,
             "duck": pygame.K_DOWN,
+            "shield": pygame.K_KP0,
             "dash": pygame.K_RSHIFT,
             "special": pygame.K_SLASH,
         },
@@ -47,6 +49,8 @@ class InputHandler:
         if keys_down[self.keys["right"]]:
             direction += 1
             pressed.add("right")
+        shielding = keys_down[self.keys["shield"]]
+        fighter.set_shielding(shielding)
         ducking = keys_down[self.keys["duck"]]
         fighter.set_ducking(ducking)
         fighter.move(direction)
@@ -59,6 +63,8 @@ class InputHandler:
                 if event.key == self.keys["dash"]:
                     fighter.dash(direction if direction != 0 else (1 if fighter.facing_right else -1))
                 if event.key == self.keys["special"]:
+                    if fighter.shielding:
+                        continue
                     if self.audio_manager is not None and fighter.weapon and fighter.weapon.can_attack():
                         self.audio_manager.play_combat_attack_sfx(
                             fighter.weapon.name,

@@ -83,6 +83,7 @@ class Fighter(ABC):
         self.is_dead = False
         self.damage_pct = 0.0  # Smash-style damage percentage
         self.ducking = False
+        self.shielding = False
 
         # Jump mechanics
         self.coyote_timer = 0.0
@@ -195,6 +196,8 @@ class Fighter(ABC):
 
         self._apply_knockback()
         self._move_and_collide(dt, tiles)
+        if self.shielding and not self.on_ground:
+            self.shielding = False
         self._check_ko()
         self._handle_movement_sfx(was_on_ground, was_dashing)
 
@@ -205,7 +208,9 @@ class Fighter(ABC):
     def _update_animation(self, dt: float) -> None:
         # Determine state
         prev_state = self.anim_state
-        if self.ducking:
+        if self.shielding:
+            self.anim_state = "shield"
+        elif self.ducking:
             self.anim_state = "duck"
         elif self.attack_timer > 0:
             self.anim_state = "attack"
@@ -385,12 +390,20 @@ class Fighter(ABC):
         """direction: -1 left, 0 stop, +1 right"""
         if self.dashing:
             return
+        if self.shielding:
+            self.vx = 0
+            return
         if self.ducking and self.on_ground:
             self.vx = 0
             return
         self.vx = direction * self.WALK_SPEED
         if direction != 0:
             self.facing_right = direction > 0
+
+    def set_shielding(self, is_shielding: bool) -> None:
+        self.shielding = is_shielding and self.on_ground
+        if self.shielding:
+            self.vx = 0
 
     def set_ducking(self, is_ducking: bool) -> None:
         self.ducking = is_ducking
@@ -399,6 +412,8 @@ class Fighter(ABC):
 
     def jump(self) -> None:
         """Called when the jump button is pressed."""
+        if self.shielding:
+            return
         can_jump = self.on_ground or self.coyote_timer > 0
         if can_jump:
             self._do_jump()
@@ -424,6 +439,8 @@ class Fighter(ABC):
 
     def dash(self, direction: int) -> None:
         """Initiate a dash if off cooldown."""
+        if self.shielding:
+            return
         if self.dash_cooldown > 0 or self.dashing:
             return
         self.dashing = True
@@ -471,6 +488,7 @@ class Fighter(ABC):
             "attack_timer": self.attack_timer,
             "on_ground": self.on_ground,
             "ducking": self.ducking,
+            "shielding": self.shielding,
         }
 
     def from_dict(self, data: dict) -> None:
@@ -495,6 +513,7 @@ class Fighter(ABC):
         self.attack_timer = data.get("attack_timer", self.attack_timer)
         self.on_ground = data.get("on_ground", self.on_ground)
         self.ducking = data.get("ducking", self.ducking)
+        self.shielding = data.get("shielding", self.shielding)
         self.rect.topleft = (int(self.x), int(self.y))
 
         is_attacking = self.attack_timer > 0 or self.anim_state == "attack"

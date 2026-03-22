@@ -41,6 +41,8 @@ class HammerFighter(Fighter):
 
     def special_move(self, direction: int) -> None:
         """Heavy hammer slam with wind-up then impact."""
+        if self.shielding:
+            return
         if self.weapon is None:
             return
         if not self.weapon.can_attack():

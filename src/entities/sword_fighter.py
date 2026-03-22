@@ -41,6 +41,8 @@ class SwordFighter(Fighter):
 
     def special_move(self, direction: int) -> None:
         """Sword swing attack."""
+        if self.shielding:
+            return
         if self.weapon is None:
             return
         hitboxes = self.weapon.try_attack(self.rect, self.facing_right)

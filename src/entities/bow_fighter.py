@@ -41,6 +41,8 @@ class BowFighter(Fighter):
 
     def special_move(self, direction: int) -> None:
         """Fire a bow projectile."""
+        if self.shielding:
+            return
         if self.weapon is None:
             return
         attacks = self.weapon.try_attack(self.rect, self.facing_right)
