@@ -7,7 +7,16 @@ from src.combat.projectile import Projectile
 from src.entities.fighter import Fighter
 from src.entities.hammer_fighter import HammerFighter
 from src.entities.sword_fighter import SwordFighter
-from src.effects.effects import HitEffect, create_hit_effect, draw_hit_effects, update_hit_effects
+from src.effects.effects import (
+    HitEffect,
+    Particle,
+    create_hit_effect,
+    create_hit_particles,
+    draw_hit_effects,
+    draw_particles,
+    update_hit_effects,
+    update_particles,
+)
 from src.effects.hitstop import HitStopState, is_hit_stopped, trigger_hit_stop, update_hit_stop
 from src.effects.screenshake import ScreenShakeState, get_screen_shake_offset, trigger_screen_shake, update_screen_shake
 from src.game.arena import build_arena
@@ -105,6 +114,7 @@ class Game:
         self._weapon_hit_registry: dict[int, set[int]] = {}
         self.projectiles: list[tuple[Fighter, Projectile]] = []
         self.hit_effects: list[HitEffect] = []
+        self.particles: list[Particle] = []
         self.hit_stop = HitStopState()
         self.screen_shake = ScreenShakeState()
         self.combo_state: dict[int, dict[str, float | int | bool]] = {}
@@ -176,6 +186,7 @@ class Game:
                 self._resolve_weapon_hits()
                 self._update_and_resolve_projectiles(dt)
                 self.hit_effects = update_hit_effects(self.hit_effects, dt)
+                self.particles = update_particles(self.particles, dt)
 
                 # --- Respawn & Stock Loss ---
                 for fighter in self.fighters:
@@ -217,6 +228,15 @@ class Game:
                             # The remote player is telling us they hit us.
                             # We take the damage gracefully because they are the authority on their weapon connecting.
                             if self.local_fighter.shielding:
+                                self.particles.extend(
+                                    create_hit_particles(
+                                        self.local_fighter.rect.centerx,
+                                        self.local_fighter.rect.centery,
+                                        event.get("weapon_name", "Sword"),
+                                        combo_count=int(event.get("combo_count", 1)),
+                                        blocked=True,
+                                    )
+                                )
                                 self._break_combo(self.remote_fighter)
                                 continue
                             self.local_fighter.damage_pct += event["damage"]
@@ -228,6 +248,15 @@ class Game:
                                 int(event.get("combo_count", 1)),
                             )
                             self.hit_effects.append(create_hit_effect(*self.local_fighter.rect.center))
+                            self.particles.extend(
+                                create_hit_particles(
+                                    self.local_fighter.rect.centerx,
+                                    self.local_fighter.rect.centery,
+                                    event.get("weapon_name", "Sword"),
+                                    combo_count=int(event.get("combo_count", 1)),
+                                    blocked=False,
+                                )
+                            )
 
                             trigger_hit_stop(
                                 self.hit_stop,
@@ -320,6 +349,15 @@ class Game:
                         target.receive_knockback(attacker.rect.centerx, scaled_knockback)
 
                     self.hit_effects.append(create_hit_effect(*target.rect.center))
+                    self.particles.extend(
+                        create_hit_particles(
+                            target.rect.centerx,
+                            target.rect.centery,
+                            weapon.name,
+                            combo_count=hit_combo_count,
+                            blocked=blocked,
+                        )
+                    )
                     trigger_hit_stop(self.hit_stop, weapon.name, combo_count=hit_combo_count)
                     trigger_screen_shake(self.screen_shake, weapon.name)
                     if self.audio_manager is not None:
@@ -379,6 +417,15 @@ class Game:
                         target.receive_knockback(owner.rect.centerx, scaled_knockback)
 
                     self.hit_effects.append(create_hit_effect(*target.rect.center))
+                    self.particles.extend(
+                        create_hit_particles(
+                            target.rect.centerx,
+                            target.rect.centery,
+                            owner_weapon_name,
+                            combo_count=hit_combo_count,
+                            blocked=blocked,
+                        )
+                    )
                     trigger_hit_stop(self.hit_stop, owner_weapon_name, combo_count=hit_combo_count)
                     trigger_screen_shake(self.screen_shake, owner_weapon_name)
                     if self.audio_manager is not None:
@@ -418,6 +465,7 @@ class Game:
 
         # Hit effects
         draw_hit_effects(self.screen, self.hit_effects, world_cam_x, world_cam_y)
+        draw_particles(self.screen, self.particles, world_cam_x, world_cam_y)
         self._draw_combo_popups(self.screen, world_cam_x, world_cam_y)
 
         # HUD
