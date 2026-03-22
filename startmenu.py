@@ -20,7 +20,7 @@ import time
 
 from src.audio import get_shared_audio_manager
 import server
-from client import NetworkClient
+from src.network.network_client import NetworkClient
 
 # Initialize Pygame
 pygame.init()
@@ -950,7 +950,6 @@ async def screen_credits():
 
 async def screen_matchmaking():
     """Matchmaking screen — connects to server and waits for opponent."""
-    from client import NetworkClient
     import random
     import string
 
@@ -1535,7 +1534,10 @@ async def main_menu():
 
         # STEP 4: Launch the actual game with the selections
         try:
-            from client import SwordFighter, BowFighter, HammerFighter, Game
+            from src.entities.sword_fighter import SwordFighter
+            from src.entities.bow_fighter import BowFighter
+            from src.entities.hammer_fighter import HammerFighter
+            from src.game.game import Game
 
             fighter_classes = {
                 "sword": SwordFighter,
@@ -1568,7 +1570,7 @@ async def main_menu():
             await game.run()
 
         except ImportError as e:
-            print(f"Could not import client module: {e}")
+            print(f"Could not import game modules: {e}")
             print("Game would start with:", selections)
         finally:
             if 'net' in locals() and net:
