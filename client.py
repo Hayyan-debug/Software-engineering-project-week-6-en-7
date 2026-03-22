@@ -1489,6 +1489,7 @@ class Game:
 
     def _resolve_weapon_hits(self) -> None:
         """Apply weapon hitbox damage + knockback with one hit per swing."""
+        is_networked = bool(self.net and self.net.connected)
         for attacker in self.fighters:
             weapon = attacker.weapon
             if weapon is None:
@@ -1515,7 +1516,7 @@ class Game:
                 if target_key in hit_targets:
                     continue
                 if any(hitbox.colliderect(target.rect) for hitbox in active_hitboxes):
-                    if target is self.remote_fighter:
+                    if is_networked and target is self.remote_fighter:
                         # Register the hit we effectively scored on the network opponent
                         # The network opponent has absolute authority over their damage, so we must SEND this!
                         if not hasattr(self.local_fighter, "pending_hit_events"):
@@ -1545,6 +1546,7 @@ class Game:
                 self.projectiles.append((attacker, attack))
 
     def _update_and_resolve_projectiles(self, dt: float) -> None:
+        is_networked = bool(self.net and self.net.connected)
         remaining: list[tuple[Fighter, Projectile]] = []
         for owner, projectile in self.projectiles:
             projectile.update(dt)
@@ -1561,7 +1563,7 @@ class Game:
                     continue
                 if projectile.rect.colliderect(target.rect):
                     owner_weapon_name = owner.weapon.name if owner.weapon is not None else "Bow"
-                    if target is self.remote_fighter:
+                    if is_networked and target is self.remote_fighter:
                         if not hasattr(self.local_fighter, "pending_hit_events"):
                             self.local_fighter.pending_hit_events = []
                         self.local_fighter.pending_hit_events.append({
