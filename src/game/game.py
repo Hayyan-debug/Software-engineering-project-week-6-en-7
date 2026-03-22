@@ -21,6 +21,7 @@ from src.effects.effects import (
 )
 from src.effects.hitstop import HitStopState, is_hit_stopped, trigger_hit_stop, update_hit_stop
 from src.effects.screenshake import ScreenShakeState, get_screen_shake_offset, trigger_screen_shake, update_screen_shake
+from src.game.ai_controller import EnemyAIController
 from src.game.arena import build_arena
 from src.game.hud import HUD
 from src.game.input import InputHandler
@@ -62,6 +63,7 @@ class Game:
         net: NetworkClient | None = None,
         audio_manager: AudioManager | None = None,
         local_player_id: int = 0,
+        enable_enemy_ai: bool = False,
     ):
         """Set up arena, fighters, HUD, effects, and optional network state."""
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -114,6 +116,8 @@ class Game:
         self.input_handler = InputHandler("wasd", audio_manager=self.audio_manager)
         self.hud = HUD(self.fighters)
         self.net = net
+        self.enable_enemy_ai = bool(enable_enemy_ai and not (self.net and self.net.connected))
+        self.enemy_ai = EnemyAIController() if self.enable_enemy_ai else None
         self._weapon_hit_registry: dict[int, set[int]] = {}
         self.projectiles: list[tuple[Fighter, Projectile]] = []
         self.hit_effects: list[HitEffect] = []
@@ -178,6 +182,13 @@ class Game:
                 self.local_fighter.update(dt, self.tiles)
                 if not (self.net and self.net.connected):
                     # Offline mode: also run physics for remote fighter
+                    if self.enemy_ai is not None:
+                        self.enemy_ai.update(
+                            controlled_fighter=self.remote_fighter,
+                            target_fighter=self.local_fighter,
+                            dt=dt,
+                            tiles=self.tiles,
+                        )
                     self.remote_fighter.update(dt, self.tiles)
                     self._spawn_projectiles_from_attacks(
                         self.remote_fighter,

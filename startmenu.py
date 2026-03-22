@@ -963,6 +963,7 @@ async def screen_matchmaking():
     net = None
     connection_status = ""
     is_joiner = False
+    solo_mode = False
     input_text = ""
     connect_failed = False
     reveal_timer = 0.0
@@ -1020,7 +1021,7 @@ async def screen_matchmaking():
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                return "QUIT", False, None
+                return "QUIT", False, None, False
             elif event.type == pygame.KEYDOWN and not transition.active:
                 if teammate_found:
                     if event.key in (pygame.K_RETURN, pygame.K_SPACE):
@@ -1029,10 +1030,10 @@ async def screen_matchmaking():
                         transition.start(lambda: None)
                 elif state == "menu":
                     if event.key == pygame.K_ESCAPE:
-                        return "QUIT", False, None
+                        return "QUIT", False, None, False
                     elif event.key == pygame.K_F1:
                         play_ui_sfx("ui_confirm")
-                        return "LOBBY", False, None
+                        return "LOBBY", False, None, True
                     elif event.key in (pygame.K_UP, pygame.K_w):
                         menu_buttons[menu_selected].selected = False
                         menu_selected = (menu_selected - 1) % len(menu_buttons)
@@ -1071,14 +1072,14 @@ async def screen_matchmaking():
                             connect_failed = False
                             state = "join_input"
                         elif menu_selected == 2:  # CONTINUE SOLO
-                            return "LOBBY", False, None
+                            return "LOBBY", False, None, True
                 elif state == "join_input":
                     if event.key == pygame.K_ESCAPE:
                         state = "menu"
                         play_ui_sfx("ui_exit")
                     elif event.key == pygame.K_F1:
                         play_ui_sfx("ui_confirm")
-                        return "LOBBY", False, None
+                        return "LOBBY", False, None, True
                     elif event.key == pygame.K_BACKSPACE:
                         input_text = input_text[:-1]
                         play_ui_sfx("ui_move")
@@ -1187,9 +1188,9 @@ async def screen_matchmaking():
         pygame.display.flip()
 
         if done[0] and not transition.active:
-            return "LOBBY", is_joiner, net
+            return "LOBBY", is_joiner, net, solo_mode
 
-    return "QUIT", False, None
+    return "QUIT", False, None, False
 
 
 # ── Screen: Battle Lobby (Weapon Select + Arena Vote) ──────────────────────
@@ -1520,7 +1521,7 @@ async def main_menu():
             continue
 
         # STEP 2: Matchmaking (connects to server)
-        action, is_joiner, net = await screen_matchmaking()
+        action, is_joiner, net, solo_mode = await screen_matchmaking()
         if action == "QUIT":
             break
 
@@ -1538,6 +1539,7 @@ async def main_menu():
             from src.entities.bow_fighter import BowFighter
             from src.entities.hammer_fighter import HammerFighter
             from src.game.game import Game
+            import random
 
             fighter_classes = {
                 "sword": SwordFighter,
@@ -1546,7 +1548,10 @@ async def main_menu():
             }
 
             # Determine local/remote based on player role
-            if is_joiner:
+            if solo_mode:
+                local_cls = fighter_classes[selections["p1_weapon"]]
+                remote_cls = random.choice(list(fighter_classes.values()))
+            elif is_joiner:
                 # Joiner is P2 — local fighter uses P2 weapon, remote uses P1 weapon
                 local_cls = fighter_classes[selections["p2_weapon"]]
                 remote_cls = fighter_classes[selections["p1_weapon"]]
@@ -1561,7 +1566,8 @@ async def main_menu():
                 fighter_cls_remote=remote_cls,
                 net=net,
                 audio_manager=audio_manager,
-                local_player_id=1 if is_joiner else 0
+                local_player_id=1 if is_joiner else 0,
+                enable_enemy_ai=solo_mode,
             )
 
             # Configure the HUD arena name from lobby selection
