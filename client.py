@@ -316,6 +316,8 @@ class Fighter(ABC):
         self.dash_timer      = 0.0
         self.dash_cooldown   = 0.0
         self.dash_direction  = 1
+        
+        self.pending_hit_events = []  # Queue of hit events to send over network
 
         # Rect for collision (updated every frame)
         self.rect = pygame.Rect(int(self.x), int(self.y), self.width, self.height)
@@ -1298,7 +1300,7 @@ class Game:
             if self.net and self.net.connected:
                 state = self.local_fighter.to_dict()
                 state["stocks"] = self.hud.stocks[self.local_fighter.player_id]
-                state["hit_events"] = getattr(self.local_fighter, "pending_hit_events", [])
+                state["hit_events"] = self.local_fighter.pending_hit_events
                 self.net.send_state(state)
                 # clear after sending
                 self.local_fighter.pending_hit_events = []
@@ -1393,10 +1395,9 @@ class Game:
                     trigger_hit_stop(self.hit_stop, weapon.name)
                     trigger_screen_shake(self.screen_shake, weapon.name)
                     if self.audio_manager is not None:
-                        # Try weapon-specific hit, then generic 'hit', then 'ui_click' as final placeholder
+                        # Try weapon-specific hit, then fallback to existing ui_confirm
                         self.audio_manager.play_sfx(f"hit_{weapon.name.lower()}", 
-                                                   fallback="hit") or \
-                        self.audio_manager.play_sfx("ui_click")
+                                                   fallback="ui_confirm")
                     hit_targets.add(target_key)
 
     def _spawn_projectiles_from_attacks(self, attacker: Fighter, attacks: list[object]) -> None:

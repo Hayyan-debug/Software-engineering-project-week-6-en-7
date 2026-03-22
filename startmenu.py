@@ -239,7 +239,7 @@ async def find_lan_host(room_key: str, port=5556, timeout=1.5) -> str | None:
     while time.time() - start_time < timeout:
         try:
             data, addr = udp.recvfrom(1024)
-            if data and data.decode() == f"GAUNTLET_GALAXY|{room_key}":
+            if data and data.decode().upper() == f"GAUNTLET_GALAXY|{room_key.upper()}":
                 return addr[0]
         except BlockingIOError:
             pass  # No data yet
@@ -1085,6 +1085,9 @@ async def screen_matchmaking():
                         play_ui_sfx("ui_move")
                     elif event.key == pygame.K_RETURN:
                         if input_text.strip():
+                            input_text = input_text.strip().upper()
+                            if not input_text.startswith("RM-"):
+                                input_text = "RM-" + input_text
                             state = "join_wait"
                             connection_status = f"SEARCHING FOR ROOM {input_text}..."
                             # Processed below event loop
