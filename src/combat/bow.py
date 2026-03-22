@@ -1,3 +1,5 @@
+"""Bow weapon implementation that fires projectile attacks."""
+
 from __future__ import annotations
 
 import pygame
@@ -7,7 +9,10 @@ from .weapon import Weapon
 
 
 class Bow(Weapon):
+    """Ranged weapon that creates moving projectiles."""
+
     def __init__(self) -> None:
+        """Set bow stats and projectile defaults."""
         super().__init__(name="Bow", damage=8, cooldown=0.45, knockback=200)
         self.projectile_speed = 700.0
         self.projectile_lifetime = 1.2
@@ -15,6 +20,7 @@ class Bow(Weapon):
         self.projectile_height = 8
 
     def attack(self, owner_rect: pygame.Rect, facing_right: bool) -> list[Projectile]:
+        """Spawn and return one projectile traveling in the facing direction."""
         spawn_x = owner_rect.right if facing_right else owner_rect.left - self.projectile_width
         spawn_y = owner_rect.y + owner_rect.height // 2 - self.projectile_height // 2
         direction = 1 if facing_right else -1

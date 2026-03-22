@@ -1,9 +1,13 @@
+"""Projectile model used by ranged combat attacks."""
+
 from __future__ import annotations
 
 import pygame
 
 
 class Projectile:
+    """Simple moving hit object with lifetime-based expiration."""
+
     def __init__(
         self,
         x: float,
@@ -16,6 +20,7 @@ class Projectile:
         width: int = 18,
         height: int = 8,
     ) -> None:
+        """Initialize projectile position, velocity, damage, and hitbox."""
         self.x = float(x)
         self.y = float(y)
         self.vx = float(vx)
@@ -27,6 +32,7 @@ class Projectile:
         self.rect = pygame.Rect(int(self.x), int(self.y), width, height)
 
     def update(self, dt: float) -> None:
+        """Move the projectile and mark it dead once lifetime expires."""
         self.x += self.vx * dt
         self.y += self.vy * dt
         self.rect.topleft = (int(self.x), int(self.y))

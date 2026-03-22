@@ -1,3 +1,5 @@
+"""Hammer weapon implementation with a wind-up followed by impact."""
+
 from __future__ import annotations
 
 import pygame
@@ -6,7 +8,10 @@ from .weapon import Weapon
 
 
 class Hammer(Weapon):
+    """Slow heavy weapon with delayed impact and high knockback."""
+
     def __init__(self) -> None:
+        """Set hammer stats and timers for wind-up/impact phases."""
         super().__init__(name="Hammer", damage=18, cooldown=0.75, knockback=450)
         self.base_damage = self.damage
         self.base_knockback = self.knockback
@@ -21,9 +26,11 @@ class Hammer(Weapon):
         self._attack_on_ground = True
 
     def set_attack_context(self, on_ground: bool) -> None:
+        """Store whether the next attack starts from the ground."""
         self._attack_on_ground = on_ground
 
     def attack(self, owner_rect: pygame.Rect, facing_right: bool) -> list[object]:
+        """Begin the attack wind-up and snapshot owner position/direction."""
         self.pending_attack = True
         self.windup_timer = self.windup_duration
         self.impact_timer = 0.0
@@ -33,6 +40,7 @@ class Hammer(Weapon):
         return []
 
     def update(self, dt: float) -> None:
+        """Advance hammer state and handle wind-up and impact expiration."""
         super().update(dt)
 
         if self.pending_attack:
@@ -49,6 +57,7 @@ class Hammer(Weapon):
                 self.knockback = self.base_knockback
 
     def _start_impact(self) -> None:
+        """Spawn the active impact hitbox when wind-up finishes."""
         self.pending_attack = False
         self.impact_timer = self.impact_duration
 
@@ -77,6 +86,7 @@ class Hammer(Weapon):
         self.active_hitbox = pygame.Rect(x, y, width, height)
 
     def get_hitboxes(self) -> list[pygame.Rect]:
+        """Return the active hammer impact hitbox if one exists."""
         if self.active_hitbox is not None:
             return [self.active_hitbox]
         return []

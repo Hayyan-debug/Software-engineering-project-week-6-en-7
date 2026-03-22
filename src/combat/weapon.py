@@ -1,3 +1,5 @@
+"""Shared combat weapon abstractions used by fighter-specific weapons."""
+
 from __future__ import annotations
 import pygame
 from abc import ABC, abstractmethod
@@ -14,6 +16,7 @@ class Weapon(ABC):
         cooldown: float,
         knockback: float,
     ) -> None:
+        """Initialize common weapon stats and internal cooldown state."""
         self.name = name
         self.damage = damage
         self.cooldown = cooldown
@@ -21,9 +24,11 @@ class Weapon(ABC):
         self._cooldown_timer = 0.0
 
     def update(self, dt: float) -> None:
+        """Advance timers by `dt` seconds."""
         self._cooldown_timer = max(0.0, self._cooldown_timer - dt)
 
     def can_attack(self) -> bool:
+        """Return True when the weapon is ready to attack."""
         return self._cooldown_timer <= 0.0
 
     def try_attack(
