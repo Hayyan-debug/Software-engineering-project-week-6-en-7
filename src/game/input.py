@@ -1,3 +1,5 @@
+"""Input mapping and per-frame control handling for a local fighter."""
+
 from __future__ import annotations
 
 import pygame
@@ -33,6 +35,7 @@ class InputHandler:
     }
 
     def __init__(self, scheme: str = "wasd", audio_manager: AudioManager | None = None):
+        """Select an input scheme and optional audio manager for attack SFX."""
         self.keys = self.SCHEMES[scheme]
         self._prev_keys: set = set()
         self.audio_manager = audio_manager

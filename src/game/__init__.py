@@ -1,3 +1,5 @@
+"""Public game-layer exports (arena, core loop, HUD, and input)."""
+
 from .arena import Tile, build_arena
 from .game import Game
 from .hud import HUD

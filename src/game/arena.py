@@ -1,3 +1,5 @@
+"""Arena tile definitions and helper functions for building map layouts."""
+
 import pygame
 
 
@@ -9,10 +11,12 @@ class Tile:
     """A single solid platform tile."""
 
     def __init__(self, x: int, y: int, w: int = TILE_SIZE, h: int = TILE_SIZE, color: tuple = TILE_COLOR):
+        """Create one collision tile at (`x`, `y`) with optional size/color."""
         self.rect = pygame.Rect(x, y, w, h)
         self.color = color
 
     def draw(self, surface: pygame.Surface, cam_x: int = 0, cam_y: int = 0) -> None:
+        """Draw the tile with a small highlight, offset by camera position."""
         rx = self.rect.x - cam_x
         ry = self.rect.y - cam_y
         pygame.draw.rect(surface, self.color, (rx, ry, self.rect.width, self.rect.height), border_radius=4)

@@ -1,3 +1,5 @@
+"""Core match loop orchestration: input, simulation, networking, and rendering."""
+
 import asyncio
 
 import pygame
@@ -61,6 +63,7 @@ class Game:
         audio_manager: AudioManager | None = None,
         local_player_id: int = 0,
     ):
+        """Set up arena, fighters, HUD, effects, and optional network state."""
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("Gauntlet Galaxy")
         self.clock = pygame.time.Clock()
@@ -365,11 +368,13 @@ class Game:
                     hit_targets.add(target_key)
 
     def _spawn_projectiles_from_attacks(self, attacker: Fighter, attacks: list[object]) -> None:
+        """Collect projectile attacks emitted by a fighter this frame."""
         for attack in attacks:
             if isinstance(attack, Projectile):
                 self.projectiles.append((attacker, attack))
 
     def _update_and_resolve_projectiles(self, dt: float) -> None:
+        """Update projectiles and resolve tile/fighter collisions."""
         is_networked = bool(self.net and self.net.connected)
         remaining: list[tuple[Fighter, Projectile]] = []
         for owner, projectile in self.projectiles:
@@ -439,6 +444,7 @@ class Game:
         self.projectiles = remaining
 
     def _draw(self, dt: float) -> None:
+        """Render the full frame: world, VFX, popups, and HUD."""
         shake_x, shake_y = get_screen_shake_offset(self.screen_shake)
         world_cam_x = -shake_x
         world_cam_y = -shake_y
@@ -474,6 +480,7 @@ class Game:
         pygame.display.flip()
 
     def _draw_stars(self, cam_x: int = 0, cam_y: int = 0) -> None:
+        """Draw background stars for the solid-color fallback scene."""
         for sx, sy, brightness in self.stars:
             radius = 1 if brightness < 0.5 else 2
             alpha = int(brightness * 200)
@@ -481,16 +488,19 @@ class Game:
             pygame.draw.circle(self.screen, color, (sx - cam_x, sy - cam_y), radius)
 
     def _combo_entry(self, fighter: Fighter) -> dict[str, float | int | bool]:
+        """Return or create combo tracking state for a fighter."""
         key = id(fighter)
         if key not in self.combo_state:
             self.combo_state[key] = {"count": 0, "active": False, "time_left": 0.0}
         return self.combo_state[key]
 
     def _combo_multiplier(self, combo_count: int) -> float:
+        """Compute damage/knockback multiplier from combo count."""
         bonus = min(COMBO_MAX_BONUS, max(0, combo_count - 1) * COMBO_BONUS_PER_HIT)
         return 1.0 + bonus
 
     def _advance_combo(self, attacker: Fighter) -> tuple[int, float]:
+        """Advance attacker combo state and return count plus multiplier."""
         entry = self._combo_entry(attacker)
         if bool(entry["active"]) and float(entry["time_left"]) > 0:
             entry["count"] = int(entry["count"]) + 1
@@ -502,12 +512,14 @@ class Game:
         return combo_count, self._combo_multiplier(combo_count)
 
     def _break_combo(self, fighter: Fighter) -> None:
+        """Reset combo state for a fighter."""
         entry = self._combo_entry(fighter)
         entry["count"] = 0
         entry["active"] = False
         entry["time_left"] = 0.0
 
     def _update_combo_state(self, dt: float) -> None:
+        """Tick combo timers and expire inactive combo chains."""
         for entry in self.combo_state.values():
             if not bool(entry["active"]):
                 continue
@@ -517,6 +529,7 @@ class Game:
                 entry["active"] = False
 
     def _record_combo_popup(self, x: int, y: int, combo_count: int) -> None:
+        """Create a floating combo popup for multi-hit sequences."""
         if combo_count < 2:
             return
         self.combo_popups.append(
@@ -532,6 +545,7 @@ class Game:
             self.audio_manager.play_combo_sfx()
 
     def _update_combo_popups(self, dt: float) -> None:
+        """Move and expire active combo popups over time."""
         remaining: list[dict[str, float | str]] = []
         for popup in self.combo_popups:
             time_left = max(0.0, float(popup["time_left"]) - dt)
@@ -543,6 +557,7 @@ class Game:
         self.combo_popups = remaining
 
     def _draw_combo_popups(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        """Draw active combo popups with fade-out alpha."""
         for popup in self.combo_popups:
             text = str(popup["text"])
             surf = self.combo_font.render(text, True, (255, 235, 120))

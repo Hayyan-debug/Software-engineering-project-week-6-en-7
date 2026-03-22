@@ -1,3 +1,5 @@
+"""Match HUD rendering for timer, stocks, player panels, and win overlay."""
+
 import math
 
 import pygame
@@ -22,6 +24,7 @@ class HUD:
     PLAYER_NAMES = ["LUNA", "RAVEN", "TITAN"]
 
     def __init__(self, fighters: list["Fighter"], match_time: float = 120.0):
+        """Initialize HUD state, stock counters, and reusable fonts."""
         self.fighters = fighters
         self.match_timer = match_time
         self.stocks = [3 for _ in fighters]
@@ -38,6 +41,7 @@ class HUD:
         self.font_winner = pygame.font.SysFont("impact", 86)
 
     def update(self, dt: float) -> None:
+        """Advance match timer and winner overlay timing."""
         self.time_acc += dt
         if self.match_timer > 0 and self.winner is None:
             self.match_timer -= dt
@@ -45,10 +49,12 @@ class HUD:
             self.winner_timer += dt
 
     def set_winner(self, player_index: int) -> None:
+        """Set the winning player index and reset overlay timer."""
         self.winner = player_index
         self.winner_timer = 0.0
 
     def lose_stock(self, player_index: int) -> None:
+        """Remove one stock and declare winner if a player reaches zero."""
         if player_index < len(self.stocks):
             self.stocks[player_index] = max(0, self.stocks[player_index] - 1)
             if self.stocks[player_index] <= 0:
@@ -57,6 +63,7 @@ class HUD:
                 self.set_winner(winner)
 
     def draw(self, surface: pygame.Surface) -> None:
+        """Draw the full HUD on top of the current frame."""
         width, _ = surface.get_size()
         self._draw_player_panel(surface, 0, width, left=True)
         if len(self.fighters) > 1:
@@ -175,6 +182,7 @@ class HUD:
         )
 
     def _draw_timer(self, surface, width):
+        """Draw match countdown timer with low-time pulse color."""
         minutes = int(self.match_timer) // 60
         seconds = int(self.match_timer) % 60
         t_text = f"{minutes}:{seconds:02d}"
@@ -186,11 +194,13 @@ class HUD:
         surface.blit(ts, ts.get_rect(center=(width // 2, 48)))
 
     def _draw_stocks(self, surface, width):
+        """Draw current stock counts for both players."""
         s1 = self.stocks[0] if len(self.stocks) > 0 else 0
         s2 = self.stocks[1] if len(self.stocks) > 1 else 0
         self._draw_outlined(surface, f"STOCKS: {s1} vs {s2}", self.font_tiny, (153, 230, 255), width // 2, 90)
 
     def _draw_arena_banner(self, surface, width):
+        """Draw the arena name banner near the bottom of the screen."""
         bw, bh = 300, 34
         _, height = surface.get_size()
         bx, by = width // 2 - bw // 2, height - 38
@@ -201,6 +211,7 @@ class HUD:
         self._draw_outlined(surface, self.arena_name, self.font_tiny, (153, 230, 255), width // 2, by + bh // 2)
 
     def _draw_winner_overlay(self, surface, width):
+        """Draw dim overlay and winner message when match is over."""
         _, height = surface.get_size()
         overlay = pygame.Surface((width, height), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 160))
