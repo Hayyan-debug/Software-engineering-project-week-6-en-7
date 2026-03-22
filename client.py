@@ -708,6 +708,7 @@ class Fighter(ABC):
         was_on_ground = self.on_ground
         was_dashing = self.dashing
         previous_vy = self.vy
+        was_attacking = self.attack_timer > 0 or self.anim_state == "attack"
 
         self.x            = data.get("x",            self.x)
         self.y            = data.get("y",            self.y)
@@ -724,6 +725,14 @@ class Fighter(ABC):
         self.attack_timer = data.get("attack_timer", self.attack_timer)
         self.on_ground    = data.get("on_ground",    self.on_ground)
         self.rect.topleft = (int(self.x), int(self.y))
+
+        is_attacking = self.attack_timer > 0 or self.anim_state == "attack"
+        if not was_attacking and is_attacking and self.audio_manager and self.weapon:
+            self.audio_manager.play_combat_attack_sfx(
+                self.weapon.name,
+                opponent=not self.is_local_player,
+            )
+
         self._handle_remote_state_sfx(was_on_ground, was_dashing, previous_vy)
 
  
@@ -1273,7 +1282,10 @@ class InputHandler:
                                  (1 if fighter.facing_right else -1))
                 if event.key == self.keys["special"]:
                     if self.audio_manager is not None and fighter.weapon and fighter.weapon.can_attack():
-                        self.audio_manager.play_sfx("special", fallback="ui_confirm")
+                        self.audio_manager.play_combat_attack_sfx(
+                            fighter.weapon.name,
+                            opponent=not fighter.is_local_player,
+                        )
                     fighter.special_move(1 if fighter.facing_right else -1)
 
         # Consume buffered jump on landing
@@ -1410,6 +1422,8 @@ class Game:
                 # --- Respawn & Stock Loss ---
                 for fighter in self.fighters:
                     if fighter.is_dead:
+                        if self.audio_manager is not None:
+                            self.audio_manager.play_ko_sfx()
                         self.hud.lose_stock(fighter.player_id)
                         # Immediately stop being dead so we don't spam lose_stock
                         fighter.is_dead = False
@@ -1450,7 +1464,9 @@ class Game:
                             trigger_hit_stop(self.hit_stop, event.get("weapon_name", "Sword"))
                             trigger_screen_shake(self.screen_shake, event.get("weapon_name", "Sword"))
                             if self.audio_manager:
-                                self.audio_manager.play_sfx(f"hit_{event.get('weapon_name', 'Sword').lower()}", fallback="ui_confirm")
+                                self.audio_manager.play_combat_hit_sfx(
+                                    event.get("weapon_name", "Sword")
+                                )
                 # Handle opponent disconnect
                 if self.net.opponent_disconnected:
                     self.hud.set_winner(self.local_fighter.player_id)
@@ -1520,9 +1536,7 @@ class Game:
                     trigger_hit_stop(self.hit_stop, weapon.name)
                     trigger_screen_shake(self.screen_shake, weapon.name)
                     if self.audio_manager is not None:
-                        # Try weapon-specific hit, then fallback to existing ui_confirm
-                        self.audio_manager.play_sfx(f"hit_{weapon.name.lower()}", 
-                                                   fallback="ui_confirm")
+                        self.audio_manager.play_combat_hit_sfx(weapon.name)
                     hit_targets.add(target_key)
 
     def _spawn_projectiles_from_attacks(self, attacker: Fighter, attacks: list[object]) -> None:
@@ -1564,7 +1578,7 @@ class Game:
                     trigger_hit_stop(self.hit_stop, owner_weapon_name)
                     trigger_screen_shake(self.screen_shake, owner_weapon_name)
                     if self.audio_manager is not None:
-                        self.audio_manager.play_sfx(f"hit_{owner_weapon_name.lower()}", fallback="ui_confirm")
+                        self.audio_manager.play_combat_hit_sfx(owner_weapon_name)
                     hit_target = True
                     break
 

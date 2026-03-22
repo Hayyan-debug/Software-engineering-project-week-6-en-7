@@ -17,6 +17,17 @@ class AudioManager:
         "dash": ("dash_1", "dash_2"),
         "land": ("land_1", "land_2"),
     }
+    combat_attack_sfx_variants: dict[str, tuple[str, ...]] = {
+        "sword": ("sword_swing_1", "sword_swing_2"),
+        "hammer": ("hammer_swing_1", "hammer_swing_2"),
+        "bow": ("bow_draw_1", "bow_draw_2"),
+    }
+    combat_hit_sfx_variants: dict[str, tuple[str, ...]] = {
+        "sword": ("hit_1", "hit_2", "hit_3", "hit_4"),
+        "hammer": ("hammer_hit_1", "hammer_hit_2"),
+        "bow": ("bow_hit_1", "bow_hit_2"),
+    }
+    combat_ko_sfx_variants: tuple[str, ...] = ("KO_1", "KO_2", "KO_3", "KO_4", "KO_5")
     movement_opponent_volume_scale = 0.6
 
     def __init__(
@@ -152,16 +163,37 @@ class AudioManager:
 
     def play_movement_sfx(self, event: str, opponent: bool = False) -> bool:
         """Play a movement SFX event using preloaded sounds only."""
+        keys = self.movement_sfx_variants.get(event)
+        if not keys:
+            return False
+        volume_scale = self.movement_opponent_volume_scale if opponent else 1.0
+        return self._play_variant_sfx(keys, volume_scale=volume_scale)
+
+    def play_combat_attack_sfx(self, weapon_name: str, opponent: bool = False) -> bool:
+        weapon_key = weapon_name.lower().strip()
+        keys = self.combat_attack_sfx_variants.get(weapon_key)
+        if not keys:
+            return False
+        volume_scale = self.movement_opponent_volume_scale if opponent else 1.0
+        return self._play_variant_sfx(keys, volume_scale=volume_scale)
+
+    def play_combat_hit_sfx(self, weapon_name: str) -> bool:
+        weapon_key = weapon_name.lower().strip()
+        keys = self.combat_hit_sfx_variants.get(weapon_key)
+        if not keys:
+            return False
+        return self._play_variant_sfx(keys)
+
+    def play_ko_sfx(self) -> bool:
+        return self._play_variant_sfx(self.combat_ko_sfx_variants)
+
+    def _play_variant_sfx(self, keys: tuple[str, ...], volume_scale: float = 1.0) -> bool:
         if not self._enabled or self._sfx_muted:
             return False
         if not self._initialized:
             self.initialize()
         if not self._preloaded:
             self.preload()
-
-        keys = self.movement_sfx_variants.get(event)
-        if not keys:
-            return False
 
         # Pick one candidate and then fall back to the others if it's missing.
         choices = list(keys)
@@ -182,7 +214,6 @@ class AudioManager:
         if channel is None:
             return False
 
-        volume_scale = self.movement_opponent_volume_scale if opponent else 1.0
         channel.set_volume(self._clamp(self._sfx_volume * volume_scale))
         return True
 
