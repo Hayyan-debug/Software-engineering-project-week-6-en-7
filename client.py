@@ -56,6 +56,11 @@ DASH_DURATION = 0.15    # s
 DASH_COOLDOWN = 0.8     # s
 WALK_SPEED = 280        # px/s
 KNOCKBACK_FRICTION = 0.94   # multiplied per frame (applied to kb velocity)
+MOVE_SFX_WALK_COOLDOWN = 0.22
+MOVE_SFX_JUMP_COOLDOWN = 0.08
+MOVE_SFX_DASH_COOLDOWN = 0.08
+MOVE_SFX_LAND_COOLDOWN = 0.12
+MOVE_SFX_WALK_SPEED_THRESHOLD = 40.0
 
 # Knockback thresholds (Smash-style percentage)
 KO_PERCENTAGE = 120     # above this, knockback can kill
@@ -274,8 +279,17 @@ class Fighter(ABC):
     WEIGHT:       float = 1.0        # heavier = less knockback received
     COLOR:        tuple = WHITE
 
-    def __init__(self, x: float, y: float, player_id: int):
+    def __init__(
+        self,
+        x: float,
+        y: float,
+        player_id: int,
+        audio_manager: AudioManager | None = None,
+        is_local_player: bool = True,
+    ):
         self.player_id = player_id
+        self.audio_manager = audio_manager
+        self.is_local_player = is_local_player
 
         # Position & velocity
         self.x = float(x)
@@ -318,6 +332,21 @@ class Fighter(ABC):
         self.dash_direction  = 1
         
         self.pending_hit_events = []  # Queue of hit events to send over network
+        self._movement_sfx_next_allowed: dict[str, float] = {
+            "walk": 0.0,
+            "jump": 0.0,
+            "dash": 0.0,
+            "land": 0.0,
+        }
+        self._movement_sfx_cooldowns: dict[str, float] = {
+            "walk": MOVE_SFX_WALK_COOLDOWN,
+            "jump": MOVE_SFX_JUMP_COOLDOWN,
+            "dash": MOVE_SFX_DASH_COOLDOWN,
+            "land": MOVE_SFX_LAND_COOLDOWN,
+        }
+        self._movement_walk_speed_threshold = max(
+            MOVE_SFX_WALK_SPEED_THRESHOLD, self.WALK_SPEED * 0.2
+        )
 
         # Rect for collision (updated every frame)
         self.rect = pygame.Rect(int(self.x), int(self.y), self.width, self.height)
@@ -385,6 +414,9 @@ class Fighter(ABC):
 
     def update(self, dt: float, tiles: list["Tile"]) -> None:
         """Main physics step."""
+        was_on_ground = self.on_ground
+        was_dashing = self.dashing
+
         self._update_timers(dt)
         if self.weapon is not None:
             self.weapon.update(dt)
@@ -397,6 +429,7 @@ class Fighter(ABC):
         self._apply_knockback()
         self._move_and_collide(dt, tiles)
         self._check_ko()
+        self._handle_movement_sfx(was_on_ground, was_dashing)
 
         # Sync rect
         self.rect.topleft = (int(self.x), int(self.y))
@@ -545,6 +578,41 @@ class Fighter(ABC):
                 self.y < -400 or self.y > HEIGHT + 200):
             self.is_dead = True
 
+    def _movement_time(self) -> float:
+        return pygame.time.get_ticks() / 1000.0
+
+    def _try_play_movement_sfx(self, event: str) -> bool:
+        if self.audio_manager is None:
+            return False
+        cooldown = self._movement_sfx_cooldowns.get(event, 0.0)
+        now = self._movement_time()
+        if now < self._movement_sfx_next_allowed.get(event, 0.0):
+            return False
+        self._movement_sfx_next_allowed[event] = now + cooldown
+        return self.audio_manager.play_movement_sfx(
+            event,
+            opponent=not self.is_local_player,
+        )
+
+    def _handle_movement_sfx(self, was_on_ground: bool, was_dashing: bool) -> None:
+        if not was_on_ground and self.on_ground:
+            self._try_play_movement_sfx("land")
+        if not was_dashing and self.dashing:
+            self._try_play_movement_sfx("dash")
+        if (
+            self.on_ground
+            and not self.dashing
+            and abs(self.vx) >= self._movement_walk_speed_threshold
+        ):
+            self._try_play_movement_sfx("walk")
+
+    def _handle_remote_state_sfx(
+        self, was_on_ground: bool, was_dashing: bool, previous_vy: float
+    ) -> None:
+        if was_on_ground and not self.on_ground and self.vy < -5 and previous_vy >= -5:
+            self._try_play_movement_sfx("jump")
+        self._handle_movement_sfx(was_on_ground, was_dashing)
+
     #  Input-driven actions                                                #
     
 
@@ -573,6 +641,7 @@ class Fighter(ABC):
         self.coyote_timer = 0.0
         if self.jumps_left > 0:
             self.jumps_left -= 1
+        self._try_play_movement_sfx("jump")
 
     def try_buffered_jump(self) -> None:
         """Called on landing to consume a buffered jump."""
@@ -636,6 +705,10 @@ class Fighter(ABC):
 
     def from_dict(self, data: dict) -> None:
         """Apply a server snapshot (used for the remote player)."""
+        was_on_ground = self.on_ground
+        was_dashing = self.dashing
+        previous_vy = self.vy
+
         self.x            = data.get("x",            self.x)
         self.y            = data.get("y",            self.y)
         self.vx           = data.get("vx",           self.vx)
@@ -651,6 +724,7 @@ class Fighter(ABC):
         self.attack_timer = data.get("attack_timer", self.attack_timer)
         self.on_ground    = data.get("on_ground",    self.on_ground)
         self.rect.topleft = (int(self.x), int(self.y))
+        self._handle_remote_state_sfx(was_on_ground, was_dashing, previous_vy)
 
  
     #  Shared draw helpers                                                 #
@@ -857,8 +931,21 @@ class SwordFighter(Fighter):
     WEIGHT     = 0.9
     COLOR      = (100, 180, 255)
 
-    def __init__(self, x: float, y: float, player_id: int):
-        super().__init__(x, y, player_id)
+    def __init__(
+        self,
+        x: float,
+        y: float,
+        player_id: int,
+        audio_manager: AudioManager | None = None,
+        is_local_player: bool = True,
+    ):
+        super().__init__(
+            x,
+            y,
+            player_id,
+            audio_manager=audio_manager,
+            is_local_player=is_local_player,
+        )
         self.weapon = Sword()
         self.sword_sprite_handler = SpritesheetHandler("assets/SwordSpriteSheet.png", cols=4, rows=3)
         self.sword_idle_frame = 0
@@ -922,8 +1009,21 @@ class BowFighter(Fighter):
     WEIGHT     = 0.85
     COLOR      = (100, 220, 130)
 
-    def __init__(self, x: float, y: float, player_id: int):
-        super().__init__(x, y, player_id)
+    def __init__(
+        self,
+        x: float,
+        y: float,
+        player_id: int,
+        audio_manager: AudioManager | None = None,
+        is_local_player: bool = True,
+    ):
+        super().__init__(
+            x,
+            y,
+            player_id,
+            audio_manager=audio_manager,
+            is_local_player=is_local_player,
+        )
         self.weapon = Bow()
         self.bow_sprite_handler = SpritesheetHandler("assets/BowSpriteSheet.png", cols=4, rows=3)
         self.bow_idle_frame = 0
@@ -987,8 +1087,21 @@ class HammerFighter(Fighter):
     WEIGHT     = 1.4
     COLOR      = (220, 100, 100)
 
-    def __init__(self, x: float, y: float, player_id: int):
-        super().__init__(x, y, player_id)
+    def __init__(
+        self,
+        x: float,
+        y: float,
+        player_id: int,
+        audio_manager: AudioManager | None = None,
+        is_local_player: bool = True,
+    ):
+        super().__init__(
+            x,
+            y,
+            player_id,
+            audio_manager=audio_manager,
+            is_local_player=is_local_player,
+        )
         self.weapon = Hammer()
         self.hammer_sprite_handler = SpritesheetHandler("assets/hammer_spritesheet.png", cols=4, rows=3)
         self.hammer_idle_frame = 0
@@ -1206,9 +1319,22 @@ class Game:
         remote_player_id = 1 if local_player_id == 0 else 0
         if fighter_cls_local is None: fighter_cls_local = SwordFighter
         if fighter_cls_remote is None: fighter_cls_remote = HammerFighter
-        
-        self.local_fighter  = fighter_cls_local( 300, 400, player_id=local_player_id)
-        self.remote_fighter = fighter_cls_remote(900, 400, player_id=remote_player_id)
+
+        self.audio_manager = audio_manager
+        self.local_fighter = fighter_cls_local(
+            300,
+            400,
+            player_id=local_player_id,
+            audio_manager=self.audio_manager,
+            is_local_player=True,
+        )
+        self.remote_fighter = fighter_cls_remote(
+            900,
+            400,
+            player_id=remote_player_id,
+            audio_manager=self.audio_manager,
+            is_local_player=False,
+        )
         
         # We need fighters ordered by player_id to render HUD correctly
         if local_player_id == 0:
@@ -1216,7 +1342,6 @@ class Game:
         else:
             self.fighters = [self.remote_fighter, self.local_fighter]
 
-        self.audio_manager = audio_manager
         self.input_handler = InputHandler("wasd", audio_manager=self.audio_manager)
         self.hud           = HUD(self.fighters)
         self.net           = net

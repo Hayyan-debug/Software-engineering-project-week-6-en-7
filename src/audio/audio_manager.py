@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import random
 
 import pygame
 
@@ -10,6 +11,13 @@ class AudioManager:
 
     music_extensions = (".mp3", ".ogg", ".wav")
     sfx_extensions = (".wav", ".ogg", ".mp3")
+    movement_sfx_variants: dict[str, tuple[str, ...]] = {
+        "walk": ("walk_1", "walk_2", "walk_3", "walk_4"),
+        "jump": ("jump_1",),
+        "dash": ("dash_1", "dash_2"),
+        "land": ("land_1", "land_2"),
+    }
+    movement_opponent_volume_scale = 0.6
 
     def __init__(
         self,
@@ -140,6 +148,42 @@ class AudioManager:
         if channel is None:
             return False
         channel.set_volume(target_volume)
+        return True
+
+    def play_movement_sfx(self, event: str, opponent: bool = False) -> bool:
+        """Play a movement SFX event using preloaded sounds only."""
+        if not self._enabled or self._sfx_muted:
+            return False
+        if not self._initialized:
+            self.initialize()
+        if not self._preloaded:
+            self.preload()
+
+        keys = self.movement_sfx_variants.get(event)
+        if not keys:
+            return False
+
+        # Pick one candidate and then fall back to the others if it's missing.
+        choices = list(keys)
+        if len(choices) > 1:
+            first = random.choice(choices)
+            choices.remove(first)
+            choices.insert(0, first)
+
+        sound: pygame.mixer.Sound | None = None
+        for key in choices:
+            sound = self._sfx_sounds.get(key)
+            if sound is not None:
+                break
+        if sound is None:
+            return False
+
+        channel = sound.play()
+        if channel is None:
+            return False
+
+        volume_scale = self.movement_opponent_volume_scale if opponent else 1.0
+        channel.set_volume(self._clamp(self._sfx_volume * volume_scale))
         return True
 
     def set_sfx_volume(self, volume: float) -> None:
