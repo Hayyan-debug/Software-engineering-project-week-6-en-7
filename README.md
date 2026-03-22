@@ -22,9 +22,13 @@ A simple 2D PvP multiplayer arena fighter built in Pygame, inspired by Super Sma
 Instructions how to play your game. Include instructions so that the grader can experience your full game (doesn't overlook any hidden features).
 
 - Use the keyboard to control your character:
-  - Move left/right with 's/d'
-  - Jump (including double jump) with 'w'
-  - Attack using your selected weapon with 'f'
+It is recommended to have two hands on the keyboard. 
+Your left hand on 'wasd' for moving and your right hand on 'jkl;' for fighting.
+  - Move left/right with 'a/d'
+  - Jump (including double jump) with 'w' or 'space'
+  - Duck with 's'
+  - Attack with 'j'
+  - Shield with 'k'
 
 - At the start of the game:
   - Select a weapon (Sword, Bow, or Hammer)
