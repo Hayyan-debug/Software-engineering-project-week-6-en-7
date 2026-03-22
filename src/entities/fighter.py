@@ -27,6 +27,7 @@ MOVE_SFX_JUMP_COOLDOWN = 0.08
 MOVE_SFX_DASH_COOLDOWN = 0.08
 MOVE_SFX_LAND_COOLDOWN = 0.12
 MOVE_SFX_WALK_SPEED_THRESHOLD = 40.0
+DUCK_FAST_FALL_MULTIPLIER = 2.0
 
 WIDTH = 1280
 HEIGHT = 720
@@ -81,6 +82,7 @@ class Fighter(ABC):
         self.facing_right = True
         self.is_dead = False
         self.damage_pct = 0.0  # Smash-style damage percentage
+        self.ducking = False
 
         # Jump mechanics
         self.coyote_timer = 0.0
@@ -148,6 +150,7 @@ class Fighter(ABC):
             "run": [2, 3, 4, 5],
             "jump": [6, 7],
             "fall": [8, 9],
+            "duck": [8],
             "dash": [10],
             "hurt": [16],
             "attack": [12, 13],
@@ -188,6 +191,7 @@ class Fighter(ABC):
             self._update_dash(dt)
         else:
             self._apply_gravity(dt)
+            self._apply_ducking_movement(dt)
 
         self._apply_knockback()
         self._move_and_collide(dt, tiles)
@@ -201,7 +205,9 @@ class Fighter(ABC):
     def _update_animation(self, dt: float) -> None:
         # Determine state
         prev_state = self.anim_state
-        if self.attack_timer > 0:
+        if self.ducking:
+            self.anim_state = "duck"
+        elif self.attack_timer > 0:
             self.anim_state = "attack"
         elif self.damage_pct > 100 and self.kb_vx != 0:  # Hit stun / high knockback
             self.anim_state = "hurt"
@@ -232,6 +238,7 @@ class Fighter(ABC):
             "run": [2, 3, 4, 5],
             "jump": [6, 7],
             "fall": [8, 9],
+            "duck": [8],
             "dash": [10],
             "hurt": [16],
             "attack": [12, 13],  # triggered by special_move normally
@@ -265,6 +272,12 @@ class Fighter(ABC):
     def _apply_gravity(self, dt: float) -> None:
         self.vy += GRAVITY * dt
         self.vy = min(self.vy, TERMINAL_VELOCITY)
+
+    def _apply_ducking_movement(self, dt: float) -> None:
+        if self.ducking and not self.on_ground:
+            extra_gravity = GRAVITY * (DUCK_FAST_FALL_MULTIPLIER - 1.0)
+            self.vy += extra_gravity * dt
+            self.vy = min(self.vy, TERMINAL_VELOCITY)
 
     def _apply_knockback(self) -> None:
         self.kb_vx *= KNOCKBACK_FRICTION
@@ -372,9 +385,17 @@ class Fighter(ABC):
         """direction: -1 left, 0 stop, +1 right"""
         if self.dashing:
             return
+        if self.ducking and self.on_ground:
+            self.vx = 0
+            return
         self.vx = direction * self.WALK_SPEED
         if direction != 0:
             self.facing_right = direction > 0
+
+    def set_ducking(self, is_ducking: bool) -> None:
+        self.ducking = is_ducking
+        if self.ducking and self.on_ground:
+            self.vx = 0
 
     def jump(self) -> None:
         """Called when the jump button is pressed."""
@@ -449,6 +470,7 @@ class Fighter(ABC):
             "anim_frame": self.anim_frame,
             "attack_timer": self.attack_timer,
             "on_ground": self.on_ground,
+            "ducking": self.ducking,
         }
 
     def from_dict(self, data: dict) -> None:
@@ -472,6 +494,7 @@ class Fighter(ABC):
         self.anim_frame = data.get("anim_frame", self.anim_frame)
         self.attack_timer = data.get("attack_timer", self.attack_timer)
         self.on_ground = data.get("on_ground", self.on_ground)
+        self.ducking = data.get("ducking", self.ducking)
         self.rect.topleft = (int(self.x), int(self.y))
 
         is_attacking = self.attack_timer > 0 or self.anim_state == "attack"

@@ -16,6 +16,7 @@ class InputHandler:
             "left": pygame.K_a,
             "right": pygame.K_d,
             "jump": pygame.K_w,
+            "duck": pygame.K_s,
             "dash": pygame.K_LSHIFT,
             "special": pygame.K_f,
         },
@@ -23,6 +24,7 @@ class InputHandler:
             "left": pygame.K_LEFT,
             "right": pygame.K_RIGHT,
             "jump": pygame.K_UP,
+            "duck": pygame.K_DOWN,
             "dash": pygame.K_RSHIFT,
             "special": pygame.K_SLASH,
         },
@@ -45,6 +47,8 @@ class InputHandler:
         if keys_down[self.keys["right"]]:
             direction += 1
             pressed.add("right")
+        ducking = keys_down[self.keys["duck"]]
+        fighter.set_ducking(ducking)
         fighter.move(direction)
 
         # --- Pressed-this-frame keys -> one-shot actions ---
