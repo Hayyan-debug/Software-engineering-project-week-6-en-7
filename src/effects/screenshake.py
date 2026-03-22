@@ -1,3 +1,5 @@
+"""Screen-shake state and helpers for combat impact feedback."""
+
 from __future__ import annotations
 
 import math
@@ -14,6 +16,8 @@ DEFAULT_SCREENSHAKE_PROFILES: dict[str, tuple[float, float, float]] = {
 
 @dataclass
 class ScreenShakeState:
+    """Stores current shake profile and remaining shake time."""
+
     time_left: float = 0.0
     duration: float = 0.0
     amplitude: float = 0.0
@@ -27,6 +31,7 @@ def trigger_screen_shake(
     weapon_name: str,
     profiles: dict[str, tuple[float, float, float]] | None = None,
 ) -> None:
+    """Start or strengthen screen shake based on weapon profile."""
     table = profiles if profiles is not None else DEFAULT_SCREENSHAKE_PROFILES
     amp, dur, freq = table.get(weapon_name.lower(), table["sword"])
 
@@ -38,6 +43,7 @@ def trigger_screen_shake(
 
 
 def update_screen_shake(state: ScreenShakeState, dt: float) -> ScreenShakeState:
+    """Advance shake state by `dt` seconds and clear finished shakes."""
     state.time_left = max(0.0, state.time_left - dt)
     if state.time_left <= 0.0:
         state.duration = 0.0
@@ -46,6 +52,7 @@ def update_screen_shake(state: ScreenShakeState, dt: float) -> ScreenShakeState:
 
 
 def get_screen_shake_offset(state: ScreenShakeState) -> tuple[int, int]:
+    """Return current integer camera offset from the active shake."""
     if state.time_left <= 0.0 or state.duration <= 0.0 or state.amplitude <= 0.0:
         return (0, 0)
 
@@ -57,4 +64,3 @@ def get_screen_shake_offset(state: ScreenShakeState) -> tuple[int, int]:
     ox = int(round(amp_now * math.sin(state.phase_x + omega * t)))
     oy = int(round(amp_now * math.sin(state.phase_y + omega * t)))
     return (ox, oy)
-

@@ -1,3 +1,5 @@
+"""Visual hit feedback effects such as flashes and particles."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,6 +18,8 @@ PARTICLE_BLOCKED_SCALE = 0.45
 
 @dataclass
 class HitEffectPalette:
+    """Color palette used to render expanding hit flash rings."""
+
     outer_start: Color = (255, 80, 90)
     outer_end: Color = (255, 220, 110)
     inner_ring: Color = (120, 225, 255)
@@ -24,6 +28,8 @@ class HitEffectPalette:
 
 @dataclass
 class HitEffect:
+    """Single timed ring-flash effect spawned on successful hits."""
+
     x: float
     y: float
     age: float
@@ -35,6 +41,8 @@ class HitEffect:
 
 @dataclass
 class Particle:
+    """Single particle used for lightweight impact burst effects."""
+
     x: float
     y: float
     vx: float
@@ -49,6 +57,7 @@ class Particle:
 
 
 def create_hit_effect(x: int, y: int, palette: HitEffectPalette | None = None) -> HitEffect:
+    """Create one hit flash effect at screen/world position (`x`, `y`)."""
     return HitEffect(
         x=float(x),
         y=float(y),
@@ -67,6 +76,7 @@ def create_hit_particles(
     combo_count: int = 1,
     blocked: bool = False,
 ) -> list[Particle]:
+    """Create impact particles based on weapon type, combo count, and block state."""
     palette = _particle_palette(weapon_name)
     combo_bonus = min(max(0, combo_count - 1) * PARTICLE_COMBO_BONUS_STEP, PARTICLE_COMBO_BONUS_MAX)
     count = PARTICLE_BASE_COUNT + combo_bonus
@@ -100,6 +110,7 @@ def create_hit_particles(
 
 
 def update_hit_effects(effects: list[HitEffect], dt: float) -> list[HitEffect]:
+    """Advance hit effects and return only still-active effects."""
     alive: list[HitEffect] = []
     for effect in effects:
         effect.age += dt
@@ -109,6 +120,7 @@ def update_hit_effects(effects: list[HitEffect], dt: float) -> list[HitEffect]:
 
 
 def update_particles(particles: list[Particle], dt: float) -> list[Particle]:
+    """Advance particle motion/fade and return only alive particles."""
     alive: list[Particle] = []
     for particle in particles:
         particle.age += dt
@@ -129,6 +141,7 @@ def update_particles(particles: list[Particle], dt: float) -> list[Particle]:
 
 
 def draw_hit_effects(surface: pygame.Surface, effects: list[HitEffect], cam_x: int = 0, cam_y: int = 0) -> None:
+    """Draw expanding ring flash effects, offset by camera position."""
     for effect in effects:
         duration = max(effect.duration, 0.001)
         progress = min(1.0, effect.age / duration)
@@ -161,6 +174,7 @@ def draw_hit_effects(surface: pygame.Surface, effects: list[HitEffect], cam_x: i
 
 
 def draw_particles(surface: pygame.Surface, particles: list[Particle], cam_x: int = 0, cam_y: int = 0) -> None:
+    """Draw hit particles, offset by camera position."""
     for particle in particles:
         if particle.alpha <= 0 or particle.size <= 0:
             continue
@@ -175,6 +189,7 @@ def draw_particles(surface: pygame.Surface, particles: list[Particle], cam_x: in
 
 
 def _particle_palette(weapon_name: str) -> tuple[Color, ...]:
+    """Return a small RGB palette tuned for a given weapon name."""
     weapon_key = weapon_name.lower().strip()
     if weapon_key == "sword":
         return ((120, 245, 255), (180, 255, 255), (95, 205, 255))
@@ -186,6 +201,7 @@ def _particle_palette(weapon_name: str) -> tuple[Color, ...]:
 
 
 def _lerp_color(a: Color, b: Color, t: float) -> Color:
+    """Linearly blend between two RGB colors."""
     return (
         int(a[0] + (b[0] - a[0]) * t),
         int(a[1] + (b[1] - a[1]) * t),
