@@ -1,3 +1,5 @@
+"""Public fighter entity exports for the game package."""
+
 from .fighter import Fighter
 from .sword_fighter import SwordFighter
 from .bow_fighter import BowFighter

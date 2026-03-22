@@ -1,3 +1,5 @@
+"""Hammer fighter entity with heavy melee attacks and high durability."""
+
 from __future__ import annotations
 
 import pygame
@@ -24,6 +26,7 @@ class HammerFighter(Fighter):
         audio_manager: AudioManager | None = None,
         is_local_player: bool = True,
     ):
+        """Initialize hammer fighter stats, weapon, and hammer sprite setup."""
         super().__init__(
             x,
             y,
@@ -56,10 +59,12 @@ class HammerFighter(Fighter):
         self.attack_timer = self.attack_duration
 
     def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        """Draw base fighter sprite and hammer overlay."""
         super().draw_character(surface, cam_x, cam_y)
         self._draw_hammer(surface, cam_x, cam_y)
 
     def _draw_hammer(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        """Draw hammer sprite frame aligned to the fighter hand position."""
         if self.attack_timer > 0 and self.hammer_attack_frames:
             attack_progress = 1.0 - (self.attack_timer / max(self.attack_duration, 0.001))
             attack_progress = max(0.0, min(attack_progress, 0.999))

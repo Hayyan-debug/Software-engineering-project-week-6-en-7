@@ -1,3 +1,5 @@
+"""Sword fighter entity with fast melee-focused behavior."""
+
 from __future__ import annotations
 
 import pygame
@@ -24,6 +26,7 @@ class SwordFighter(Fighter):
         audio_manager: AudioManager | None = None,
         is_local_player: bool = True,
     ):
+        """Initialize sword fighter stats, weapon, and sword sprite setup."""
         super().__init__(
             x,
             y,
@@ -53,10 +56,12 @@ class SwordFighter(Fighter):
             self.attack_timer = self.attack_duration
 
     def draw_character(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        """Draw base fighter sprite and sword overlay."""
         super().draw_character(surface, cam_x, cam_y)
         self._draw_sword(surface, cam_x, cam_y)
 
     def _draw_sword(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        """Draw sword sprite frame aligned to the fighter hand position."""
         if self.attack_timer > 0 and self.sword_attack_frames:
             attack_progress = 1.0 - (self.attack_timer / max(self.attack_duration, 0.001))
             attack_progress = max(0.0, min(attack_progress, 0.999))

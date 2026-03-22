@@ -1,3 +1,5 @@
+"""Base fighter entity with shared movement, physics, and state sync logic."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -59,6 +61,7 @@ class Fighter(ABC):
         audio_manager: AudioManager | None = None,
         is_local_player: bool = True,
     ):
+        """Initialize fighter state, movement systems, and animation data."""
         self.player_id = player_id
         self.audio_manager = audio_manager
         self.is_local_player = is_local_player
@@ -136,6 +139,7 @@ class Fighter(ABC):
         """Weapon-specific special action (sword slash, arrow shot, etc.)."""
 
     def consume_pending_attacks(self) -> list[object]:
+        """Return queued attacks and clear the pending queue."""
         attacks = self.pending_attacks
         self.pending_attacks = []
         return attacks
@@ -206,6 +210,7 @@ class Fighter(ABC):
         self._update_animation(dt)
 
     def _update_animation(self, dt: float) -> None:
+        """Update animation state and advance frame timing."""
         # Determine state
         prev_state = self.anim_state
         if self.shielding:
@@ -262,6 +267,7 @@ class Fighter(ABC):
             self.anim_frame = (self.anim_frame + 1) % len(frames)
 
     def _update_timers(self, dt: float) -> None:
+        """Tick movement, dash, jump, and attack timers."""
         if not self.on_ground:
             self.coyote_timer = max(0.0, self.coyote_timer - dt)
         self.jump_buffer = max(0.0, self.jump_buffer - dt)
@@ -275,16 +281,19 @@ class Fighter(ABC):
                 self.vx = self.dash_direction * self.WALK_SPEED * 0.4
 
     def _apply_gravity(self, dt: float) -> None:
+        """Apply gravity while respecting terminal fall speed."""
         self.vy += GRAVITY * dt
         self.vy = min(self.vy, TERMINAL_VELOCITY)
 
     def _apply_ducking_movement(self, dt: float) -> None:
+        """Apply extra downward acceleration when fast-falling while ducking."""
         if self.ducking and not self.on_ground:
             extra_gravity = GRAVITY * (DUCK_FAST_FALL_MULTIPLIER - 1.0)
             self.vy += extra_gravity * dt
             self.vy = min(self.vy, TERMINAL_VELOCITY)
 
     def _apply_knockback(self) -> None:
+        """Decay knockback velocity over time."""
         self.kb_vx *= KNOCKBACK_FRICTION
         self.kb_vy *= KNOCKBACK_FRICTION
         if abs(self.kb_vx) < 1:
@@ -293,6 +302,7 @@ class Fighter(ABC):
             self.kb_vy = 0
 
     def _move_and_collide(self, dt: float, tiles: list[Tile]) -> None:
+        """Move the fighter and resolve tile collisions on both axes."""
         total_vx = self.vx + self.kb_vx
         total_vy = self.vy + self.kb_vy
 
@@ -358,9 +368,11 @@ class Fighter(ABC):
             self.is_dead = True
 
     def _movement_time(self) -> float:
+        """Return current game time in seconds for SFX cooldown tracking."""
         return pygame.time.get_ticks() / 1000.0
 
     def _try_play_movement_sfx(self, event: str) -> bool:
+        """Play a movement SFX event if cooldown and audio settings allow it."""
         if self.audio_manager is None:
             return False
         cooldown = self._movement_sfx_cooldowns.get(event, 0.0)
@@ -374,6 +386,7 @@ class Fighter(ABC):
         )
 
     def _handle_movement_sfx(self, was_on_ground: bool, was_dashing: bool) -> None:
+        """Trigger local movement SFX transitions (land, dash, walk)."""
         if not was_on_ground and self.on_ground:
             self._try_play_movement_sfx("land")
         if not was_dashing and self.dashing:
@@ -382,6 +395,7 @@ class Fighter(ABC):
             self._try_play_movement_sfx("walk")
 
     def _handle_remote_state_sfx(self, was_on_ground: bool, was_dashing: bool, previous_vy: float) -> None:
+        """Trigger movement SFX for state changes received from snapshots."""
         if was_on_ground and not self.on_ground and self.vy < -5 and previous_vy >= -5:
             self._try_play_movement_sfx("jump")
         self._handle_movement_sfx(was_on_ground, was_dashing)
@@ -401,11 +415,13 @@ class Fighter(ABC):
             self.facing_right = direction > 0
 
     def set_shielding(self, is_shielding: bool) -> None:
+        """Enable shielding only while grounded; stop horizontal movement."""
         self.shielding = is_shielding and self.on_ground
         if self.shielding:
             self.vx = 0
 
     def set_ducking(self, is_ducking: bool) -> None:
+        """Set ducking state and halt movement when crouching on ground."""
         self.ducking = is_ducking
         if self.ducking and self.on_ground:
             self.vx = 0
@@ -424,6 +440,7 @@ class Fighter(ABC):
             self.jump_buffer = JUMP_BUFFER
 
     def _do_jump(self) -> None:
+        """Execute jump impulse and consume one jump charge."""
         self.vy = self.JUMP_FORCE
         self.on_ground = False
         self.coyote_timer = 0.0
@@ -463,6 +480,7 @@ class Fighter(ABC):
         self.kb_vy = -power * scale * 0.6  # upward component
 
     def respawn(self, x: float, y: float) -> None:
+        """Reset position and combat state after a KO."""
         self.x, self.y = x, y
         self.vx = self.vy = 0.0
         self.kb_vx = self.kb_vy = 0.0
@@ -471,6 +489,7 @@ class Fighter(ABC):
         self.jumps_left = 2
 
     def to_dict(self) -> dict:
+        """Serialize fighter state for networking."""
         return {
             "id": self.player_id,
             "x": self.x,
@@ -526,6 +545,7 @@ class Fighter(ABC):
         self._handle_remote_state_sfx(was_on_ground, was_dashing, previous_vy)
 
     def draw(self, surface: pygame.Surface, cam_x: int = 0, cam_y: int = 0) -> None:
+        """Render fighter visuals and damage HUD."""
         self.draw_character(surface, cam_x, cam_y)
         self._draw_damage_hud(surface, cam_x, cam_y)
 
