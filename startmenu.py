@@ -761,19 +761,19 @@ async def screen_start_menu():
     """The main start menu screen. Returns the action chosen."""
     buttons = [
         MenuButton("START GAME", WIDTH // 2, 560, 240, 55),
-        MenuButton("NEW PROFILE", WIDTH // 2, 560, 240, 55),
-        MenuButton("OPTIONS", WIDTH // 2, 560, 220, 55),
         MenuButton("CREDITS", WIDTH // 2, 560, 220, 55),
     ]
 
     # Position buttons horizontally like in the concept
-    total_btn_width = 240 + 240 + 220 + 220 + 3 * 30
+    spacing = 30
+    widths = [240, 220]
+    total_btn_width = sum(widths) + (len(widths) - 1) * spacing
     start_x = (WIDTH - total_btn_width) // 2
-    offsets = [0, 270, 510, 730]
-    widths = [240, 240, 220, 220]
+    
+    current_x = start_x
     for i, btn in enumerate(buttons):
-        cx = start_x + offsets[i] + widths[i] // 2
-        btn.rect = pygame.Rect(cx - widths[i] // 2, 620, widths[i], 55)
+        btn.rect = pygame.Rect(current_x, 620, widths[i], 55)
+        current_x += widths[i] + spacing
 
     selected = 0
     buttons[selected].selected = True
@@ -806,7 +806,7 @@ async def screen_start_menu():
                     if selected == 0:
                         result[0] = "START_GAME"
                         transition.start(lambda: None)
-                    elif selected == 3:
+                    elif selected == 1:
                         result[0] = "CREDITS"
         # Yield control for pygbag/browser
         await asyncio.sleep(0)
@@ -826,7 +826,7 @@ async def screen_start_menu():
 
         # Prompt text (pulsing)
         pulse_alpha = int((math.sin(pulse_timer * 4) * 0.2 + 0.8) * 255)
-        prompt_text = "[START] PRESS ANY BUTTON"
+        prompt_text = "[ENTER] START GAME"
         prompt_surf = font_prompt.render(prompt_text, True, ORANGE)
         prompt_outline = font_prompt.render(prompt_text, True, BLACK)
         prompt_surf.set_alpha(pulse_alpha)
@@ -840,7 +840,7 @@ async def screen_start_menu():
             btn.draw(screen, pulse_timer)
 
         # Footer
-        draw_outlined_text(screen, "A CONFIRM", font_tiny, GRAY, WIDTH // 2, HEIGHT - 22)
+        draw_outlined_text(screen, "ENTER: CONFIRM", font_tiny, GRAY, WIDTH // 2, HEIGHT - 22)
 
         transition.draw(screen)
         pygame.display.flip()
@@ -1157,8 +1157,8 @@ async def screen_battle_lobby():
         draw_panel(screen, (0, HEIGHT - 70, WIDTH, 70), alpha=230, border_color=(60, 70, 90))
 
         # Input hints
-        draw_outlined_text(screen, "A CONFIRM", font_tiny, GRAY, 80, HEIGHT - 40)
-        draw_outlined_text(screen, "B BACK", font_tiny, GRAY, 200, HEIGHT - 40)
+        draw_outlined_text(screen, "ENTER: CONFIRM", font_tiny, GRAY, 80, HEIGHT - 40)
+        draw_outlined_text(screen, "ESC: BACK", font_tiny, GRAY, 200, HEIGHT - 40)
 
         # Big confirm button
         if confirm_ready:
@@ -1180,8 +1180,8 @@ async def screen_battle_lobby():
         draw_outlined_text(screen, focus_labels.get(focus, ""), font_small,
                            YELLOW, WIDTH // 2, HEIGHT - 80)
 
-        # START READY hint
-        draw_outlined_text(screen, "START READY", font_tiny, GRAY, WIDTH - 80, HEIGHT - 40)
+        # ESC READY hint
+        draw_outlined_text(screen, "ESC: BACK", font_tiny, GRAY, WIDTH - 80, HEIGHT - 40)
 
         transition.draw(screen)
         pygame.display.flip()
@@ -1196,74 +1196,71 @@ async def screen_battle_lobby():
 
 async def main_menu():
     """Complete game flow: Start Menu → Matchmaking → Lobby → Game."""
-    audio_manager.play_music("menu_theme_1")
+    while True:
+        audio_manager.play_music("menu_theme_1")
 
-    # STEP 1: Start Menu
-    action = await screen_start_menu()
-    if action == "QUIT":
-        pygame.quit()
-        sys.exit()
+        # STEP 1: Start Menu
+        action = await screen_start_menu()
+        if action == "QUIT":
+            break
 
-    if action == "CREDITS":
-        await screen_credits()
-        # After credits, go back to start
-        await main_menu()
-        return
+        if action == "CREDITS":
+            await screen_credits()
+            # After credits, the loop restarts
+            continue
 
-    # STEP 2: Matchmaking
-    result = await screen_matchmaking()
-    if result == "QUIT":
-        pygame.quit()
-        sys.exit()
+        # STEP 2: Matchmaking
+        result = await screen_matchmaking()
+        if result == "QUIT":
+            break
 
-    # STEP 3: Battle Lobby (weapon select + arena vote)
-    selections = await screen_battle_lobby()
-    if selections is None:
-        pygame.quit()
-        sys.exit()
+        # STEP 3: Battle Lobby (weapon select + arena vote)
+        selections = await screen_battle_lobby()
+        if selections is None:
+            break
 
-    print(f"Game starting with selections: {selections}")
+        print(f"Game starting with selections: {selections}")
 
-    # STEP 4: Launch the actual game with the selections
-    # Map weapon type to fighter class
-    weapon_map = {
-        "sword": "SwordFighter",
-        "bow": "BowFighter",
-        "hammer": "HammerFighter",
-    }
-
-    try:
-        from client import SwordFighter, BowFighter, HammerFighter, Game, NetworkClient
-
-        fighter_classes = {
-            "sword": SwordFighter,
-            "bow": BowFighter,
-            "hammer": HammerFighter,
+        # STEP 4: Launch the actual game with the selections
+        # Map weapon type to fighter class
+        weapon_map = {
+            "sword": "SwordFighter",
+            "bow": "BowFighter",
+            "hammer": "HammerFighter",
         }
 
-        # Attempt network connection
-        net = NetworkClient(host="localhost", port=5555)
-        connected = net.connect()
-        if not connected:
-            print("[client] No server found — running in local/offline mode.")
-            net = None
+        try:
+            from client import SwordFighter, BowFighter, HammerFighter, Game, NetworkClient
 
-        game = Game(
-            arena_id=selections["arena_id"],
-            fighter_cls_local=fighter_classes[selections["p1_weapon"]],
-            fighter_cls_remote=fighter_classes[selections["p2_weapon"]],
-            net=net,
-            audio_manager=audio_manager,
-        )
+            fighter_classes = {
+                "sword": SwordFighter,
+                "bow": BowFighter,
+                "hammer": HammerFighter,
+            }
 
-        # Configure the HUD arena name from lobby selection
-        game.hud.arena_name = selections["arena_name"].upper()
+            # Attempt network connection
+            net = NetworkClient(host="localhost", port=5555)
+            connected = net.connect()
+            if not connected:
+                print("[client] No server found — running in local/offline mode.")
+                net = None
 
-        await game.run()
+            game = Game(
+                arena_id=selections["arena_id"],
+                fighter_cls_local=fighter_classes[selections["p1_weapon"]],
+                fighter_cls_remote=fighter_classes[selections["p2_weapon"]],
+                net=net,
+                audio_manager=audio_manager,
+            )
 
-    except ImportError as e:
-        print(f"Could not import client module: {e}")
-        print("Game would start with:", selections)
+            # Configure the HUD arena name from lobby selection
+            game.hud.arena_name = selections["arena_name"].upper()
+
+            await game.run()
+
+        except ImportError as e:
+            print(f"Could not import client module: {e}")
+            print("Game would start with:", selections)
 
     pygame.quit()
     sys.exit()

@@ -1059,8 +1059,8 @@ class InputHandler:
                     fighter.dash(direction if direction != 0 else
                                  (1 if fighter.facing_right else -1))
                 if event.key == self.keys["special"]:
-                    if self.audio_manager is not None:
-                        self.audio_manager.play_sfx("special")
+                    if self.audio_manager is not None and fighter.weapon and fighter.weapon.can_attack():
+                        self.audio_manager.play_sfx("special", fallback="ui_confirm")
                     fighter.special_move(1 if fighter.facing_right else -1)
 
         # Consume buffered jump on landing
@@ -1143,6 +1143,9 @@ class Game:
                     running = False
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     running = False
+                # Return to menu on Enter if game is over
+                if self.hud.winner is not None and event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN:
+                    running = False
                 events.append(event)
 
             keys = pygame.key.get_pressed()
@@ -1185,8 +1188,7 @@ class Game:
             # --- Render ---
             self._draw(dt)
 
-        pygame.quit()
-        sys.exit()
+        # Loop ends -> Return to menu (caller handles cleanup or restart)
 
     def _check_player_collision(self) -> None:
         """Simple AABB player-vs-player collision with light knockback."""
@@ -1233,8 +1235,10 @@ class Game:
                     trigger_hit_stop(self.hit_stop, weapon.name)
                     trigger_screen_shake(self.screen_shake, weapon.name)
                     if self.audio_manager is not None:
-                        if not self.audio_manager.play_sfx(f"hit_{weapon.name.lower()}"):
-                            self.audio_manager.play_sfx("hit")
+                        # Try weapon-specific hit, then generic 'hit', then 'ui_click' as final placeholder
+                        self.audio_manager.play_sfx(f"hit_{weapon.name.lower()}", 
+                                                   fallback="hit") or \
+                        self.audio_manager.play_sfx("ui_click")
                     hit_targets.add(target_key)
 
     def _spawn_projectiles_from_attacks(self, attacker: Fighter, attacks: list[object]) -> None:
@@ -1265,8 +1269,10 @@ class Game:
                     trigger_hit_stop(self.hit_stop, owner_weapon_name)
                     trigger_screen_shake(self.screen_shake, owner_weapon_name)
                     if self.audio_manager is not None:
-                        if not self.audio_manager.play_sfx(f"hit_{owner_weapon_name.lower()}"):
-                            self.audio_manager.play_sfx("hit")
+                        # Same fallback chain for projectiles
+                        self.audio_manager.play_sfx(f"hit_{owner_weapon_name.lower()}", 
+                                                   fallback="hit") or \
+                        self.audio_manager.play_sfx("ui_click")
                     hit_target = True
                     break
 

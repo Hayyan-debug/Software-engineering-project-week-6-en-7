@@ -118,7 +118,7 @@ class AudioManager:
             self.initialize()
         pygame.mixer.music.set_volume(self._music_volume)
 
-    def play_sfx(self, name: str, volume: float | None = None) -> bool:
+    def play_sfx(self, name: str, volume: float | None = None, fallback: str | None = None) -> bool:
         if not self._enabled or self._sfx_muted:
             return False
         if not self._initialized:
@@ -128,6 +128,8 @@ class AudioManager:
 
         sound = self._sfx_sounds.get(name)
         if sound is None:
+            if fallback:
+                return self.play_sfx(fallback, volume)
             if name not in self._warned_missing_sfx:
                 print(f"[audio] unknown sfx: {name}")
                 self._warned_missing_sfx.add(name)
