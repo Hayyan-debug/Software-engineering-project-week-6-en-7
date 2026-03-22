@@ -5,7 +5,8 @@
 ## Introduction
 A simple 2D PvP multiplayer arena fighter built in Pygame, inspired by Super Smash Bros. Two players pick from 3 weapons (sword, bow, hammer), vote on arenas, then battle with platforming, attacks, and knockback until one gets KO'd off-screen. Local net play via sockets keeps it fast and fair.
 
-![Concept Art](./concept.png)
+![Concept Art](assets/concept.png)
+![Gameplay](assets/gifs/gameplay.gif)
 
 ## Install/Run Instructions
 1. Make sure you have Python 3 installed.
@@ -38,7 +39,7 @@ Instructions how to play your game. Include instructions so that the grader can 
 ## Design
 Optional: Add some description of the design choices, and maybe a UML class diagram or other material if that helped you during development.
 
-# Combat Weapons UML diagram
+### Combat Weapons UML diagram
 
 ```mermaid
 classDiagram
