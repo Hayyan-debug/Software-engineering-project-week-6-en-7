@@ -29,6 +29,7 @@ Your left hand on 'wasd' for moving and your right hand on 'jkl;' for fighting.
   - Duck with 's'
   - Attack with 'j'
   - Shield with 'k'
+  - Dash with 'L-shift'
 
 - At the start of the game:
   - Select a weapon (Sword, Bow, or Hammer)
