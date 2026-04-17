@@ -5,6 +5,14 @@
 ## Introduction
 A simple 2D PvP multiplayer arena fighter built in Pygame, inspired by Super Smash Bros. Two players pick from 3 weapons (sword, bow, hammer), vote on arenas, then battle with platforming, attacks, and knockback until one gets KO'd off-screen. Local net play via sockets keeps it fast and fair.
 
+## About
+Gauntlet Galaxy is a local multiplayer fighting game project focused on fast-paced 1v1 combat, simple setup, and clear game feel.  
+The repository contains the full game implementation, including:
+- Character movement and combat systems
+- Weapon classes (sword, bow, hammer) and projectile logic
+- Arena selection flow and PvP gameplay loop
+- Socket-based local network play support
+
 ### Concept art
 ![Concept Art](assets/concept.png)
 
@@ -94,4 +102,3 @@ Olivier Eikelenboom.
 
 ## Task Division (Verdeling)
 For a detailed division of tasks between team members, please refer to [Verdeling.md](./Verdeling.md).
-
